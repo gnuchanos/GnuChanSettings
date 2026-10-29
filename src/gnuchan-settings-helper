@@ -1,0 +1,125 @@
+#!/usr/bin/python3
+"""Apply the fixed system-level options exposed by GnuChanSettings."""
+
+import os
+import pwd
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+TLP_CONFIG = Path("/etc/tlp.d/90-gnuchan-settings.conf")
+LOGIND_CONFIG = Path("/etc/systemd/logind.conf.d/90-gnuchan-settings.conf")
+POWER_PROFILES = {
+    "CPU balance": "balanced",
+    "Performance": "performance",
+    "Battery protection": "powersave",
+}
+SYSTEM_LOCALES = {
+    "English (en_US.UTF-8)": "en_US.UTF-8",
+    "Turkish (tr_TR.UTF-8)": "tr_TR.UTF-8",
+    "Türkçe (tr_TR.UTF-8)": "tr_TR.UTF-8",
+}
+APP_LANGUAGES = {"English": "en", "Türkçe": "tr"}
+APP_LANGUAGES["Turkish"] = "tr"
+
+
+def atomic_write(path: Path, contents: str, owner: tuple[int, int] | None = None) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as target:
+            target.write(contents)
+            target.flush()
+            os.fsync(target.fileno())
+        os.chmod(temporary, 0o644)
+        if owner is not None:
+            os.chown(temporary, *owner)
+        os.replace(temporary, path)
+    except Exception:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def apply(profile: str, locale: str, app_language: str) -> None:
+    if os.geteuid() != 0:
+        raise RuntimeError("system settings helper must run as root")
+    if profile not in POWER_PROFILES:
+        raise ValueError("unsupported power profile")
+    if locale not in SYSTEM_LOCALES:
+        raise ValueError("unsupported system language")
+    if app_language not in APP_LANGUAGES:
+        raise ValueError("unsupported GnuChan language")
+
+    profile = POWER_PROFILES[profile]
+    locale = SYSTEM_LOCALES[locale]
+    app_language = APP_LANGUAGES[app_language]
+    ac_governor = "performance" if profile == "performance" else "powersave"
+    battery_governor = "performance" if profile == "performance" else "powersave"
+    ac_policy = {
+        "balanced": "balance_performance",
+        "performance": "performance",
+        "powersave": "power",
+    }[profile]
+    battery_policy = {
+        "balanced": "balance_power",
+        "performance": "performance",
+        "powersave": "power",
+    }[profile]
+    charge_limits = (
+        "START_CHARGE_THRESH_BAT0=75\nSTOP_CHARGE_THRESH_BAT0=80\n"
+        if profile == "powersave" else ""
+    )
+    atomic_write(
+        TLP_CONFIG,
+        f"CPU_SCALING_GOVERNOR_ON_AC={ac_governor}\n"
+        f"CPU_SCALING_GOVERNOR_ON_BAT={battery_governor}\n"
+        f"CPU_ENERGY_PERF_POLICY_ON_AC={ac_policy}\n"
+        f"CPU_ENERGY_PERF_POLICY_ON_BAT={battery_policy}\n"
+        + charge_limits,
+    )
+    atomic_write(
+        LOGIND_CONFIG,
+        "[Login]\n"
+        "HandleLidSwitch=ignore\n"
+        "HandleLidSwitchExternalPower=ignore\n"
+        "HandleLidSwitchDocked=ignore\n",
+    )
+
+    subprocess.run(["locale-gen", locale], check=True)
+    subprocess.run(["update-locale", f"LANG={locale}"], check=True)
+    subprocess.run(["tlp", "start"], check=True)
+    try:
+        uid = int(os.environ["PKEXEC_UID"])
+        account = pwd.getpwuid(uid)
+    except (KeyError, ValueError) as error:
+        raise RuntimeError("cannot determine the requesting user") from error
+    owner = (account.pw_uid, account.pw_gid)
+    config_dir = Path(account.pw_dir) / ".config"
+    environment_dir = config_dir / "environment.d"
+    config_dir.mkdir(mode=0o700, exist_ok=True)
+    environment_dir.mkdir(mode=0o700, exist_ok=True)
+    os.chown(config_dir, *owner)
+    os.chown(environment_dir, *owner)
+    app_locale = "tr_TR.UTF-8" if app_language == "tr" else "en_US.UTF-8"
+    atomic_write(
+        environment_dir / "90-gnuchan.conf",
+        f"LANGUAGE={app_language}\nLC_MESSAGES={app_locale}\n",
+        owner,
+    )
+    print("Lid events are disabled; the setting will apply after reboot.")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 5 or sys.argv[1] != "apply":
+        raise SystemExit(
+            "usage: gnuchan-settings-helper apply PROFILE LOCALE APP_LANGUAGE"
+        )
+    try:
+        apply(sys.argv[2], sys.argv[3], sys.argv[4])
+    except (OSError, subprocess.CalledProcessError, RuntimeError, ValueError) as error:
+        print(f"gnuchan-settings-helper: {error}", file=sys.stderr)
+        raise SystemExit(1) from error
