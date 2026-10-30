@@ -147,57 +147,27 @@ static int list_item_bounds(const char *text, int wanted,
     return 0;
 }
 
-static int list_item_at(SettingsUi *ui, int row, int x) {
-    int field_x, field_y, field_width, field_height;
-    settings_ui_row_field_rect(ui, row, &field_x, &field_y, &field_width,
-                               &field_height);
-    (void)field_y;
-    (void)field_height;
-    const int button_width = 32;
-    const int gap = 6;
-    int input_width = field_width - button_width * 2 - gap * 2;
-    int item_x = field_x + 5;
-    int inner_right = field_x + input_width - 5;
-    const char *entry = ui->page.values[row].text;
-    int item_index = 0;
-
-    while (*entry && item_x < inner_right) {
-        const char *end = strchr(entry, ';');
-        size_t length = end ? (size_t)(end - entry) : strlen(entry);
-        while (length > 0 && isspace((unsigned char)entry[length - 1])) {
-            length--;
+static size_t utf8_previous_offset(const char *text, size_t offset) {
+    if (offset > 0) {
+        offset--;
+        while (offset > 0 &&
+               ((unsigned char)text[offset] & 0xc0) == 0x80) {
+            offset--;
         }
-        while (length > 0 && isspace((unsigned char)*entry)) {
-            entry++;
-            length--;
-        }
-        if (length > 0) {
-            char item[SETTINGS_TEXT_LENGTH];
-            size_t copy = length < sizeof(item) - 1 ? length : sizeof(item) - 1;
-            memcpy(item, entry, copy);
-            item[copy] = '\0';
-            XGlyphInfo extent;
-            XftTextExtentsUtf8(ui->display, ui->style.font,
-                               (const FcChar8 *)item, (int)strlen(item),
-                               &extent);
-            int chip_width = (int)extent.xOff + 16;
-            if (chip_width > inner_right - item_x) {
-                chip_width = inner_right - item_x;
-            }
-            if (x >= item_x && x < item_x + chip_width) {
-                return item_index;
-            }
-            if (chip_width > 8) {
-                item_x += chip_width + 4;
-            }
-            item_index++;
-        }
-        if (!end) {
-            break;
-        }
-        entry = end + 1;
     }
-    return -1;
+    return offset;
+}
+
+static size_t utf8_next_offset(const char *text, size_t offset) {
+    size_t length = strlen(text);
+    if (offset < length) {
+        offset++;
+        while (offset < length &&
+               ((unsigned char)text[offset] & 0xc0) == 0x80) {
+            offset++;
+        }
+    }
+    return offset;
 }
 
 void settings_ui_save_rect(const SettingsUi *ui, int *x, int *y,
@@ -262,6 +232,8 @@ void settings_ui_load_page(SettingsUi *ui) {
     ui->list_selected_row = -1;
     ui->list_selected_item = -1;
     ui->list_editing = 0;
+    ui->list_editor_open = 0;
+    ui->list_scroll = 0;
     ui->scroll = 0;
     ui->status[0] = '\0';
     ui->status_failed = 0;
@@ -379,6 +351,54 @@ static void field_insert(SettingsUi *ui, const char *text) {
     }
     SettingValue *value = &ui->page.values[ui->focus_row];
 
+    if (def->type == SETTING_LIST) {
+        int entries = list_item_count(value->text);
+        size_t start = 0;
+        size_t end = 0;
+        int adding = ui->list_selected_item == entries;
+        if (!adding &&
+            !list_item_bounds(value->text, ui->list_selected_item,
+                              &start, &end)) {
+            return;
+        }
+        size_t length = strlen(value->text);
+        char accepted[8];
+        size_t accepted_length = 0;
+        for (const char *p = text; *p; p++) {
+            if (field_accepts_char(def, *p) &&
+                accepted_length < sizeof(accepted)) {
+                accepted[accepted_length++] = *p;
+            }
+        }
+        if (accepted_length == 0) {
+            return;
+        }
+        int separator = adding && length > 0 &&
+                        value->text[length - 1] != ';';
+        if (length + accepted_length + (size_t)separator >=
+            sizeof(value->text)) {
+            return;
+        }
+        if (adding) {
+            if (separator) {
+                value->text[length++] = ';';
+                value->text[length] = '\0';
+            }
+            start = end = length;
+        }
+        size_t item_length = end - start;
+        if (ui->caret < 0 || (size_t)ui->caret > item_length) {
+            ui->caret = (int)item_length;
+        }
+        size_t insert_at = start + (size_t)ui->caret;
+        memmove(value->text + insert_at + accepted_length,
+                value->text + insert_at,
+                length - insert_at + 1);
+        memcpy(value->text + insert_at, accepted, accepted_length);
+        ui->caret += (int)accepted_length;
+        return;
+    }
+
     size_t length = strlen(value->text);
     for (const char *p = text; *p; p++) {
         if (!field_accepts_char(def, *p)) {
@@ -402,6 +422,31 @@ static void field_backspace(SettingsUi *ui) {
         return;
     }
     SettingValue *value = &ui->page.values[ui->focus_row];
+    if (ui->page.app->settings[ui->focus_row].type == SETTING_LIST) {
+        int entries = list_item_count(value->text);
+        if (ui->list_selected_item < 0 ||
+            ui->list_selected_item >= entries || ui->caret <= 0) {
+            return;
+        }
+        size_t start = 0;
+        size_t end = 0;
+        if (!list_item_bounds(value->text, ui->list_selected_item,
+                              &start, &end)) {
+            return;
+        }
+        size_t item_length = end - start;
+        if ((size_t)ui->caret > item_length) {
+            ui->caret = (int)item_length;
+        }
+        size_t previous = utf8_previous_offset(value->text + start,
+                                               (size_t)ui->caret);
+        size_t remove_at = start + previous;
+        size_t remove_end = start + (size_t)ui->caret;
+        memmove(value->text + remove_at, value->text + remove_end,
+                strlen(value->text + remove_end) + 1);
+        ui->caret = (int)previous;
+        return;
+    }
     size_t length = strlen(value->text);
     if (length == 0) {
         return;
@@ -422,6 +467,9 @@ static void toggle_bool(SettingsUi *ui, int row) {
     setting_value_set_bool(value, flag, ui->page.app->capital_bools);
 }
 
+static void add_list_item(SettingsUi *ui, int row);
+static void remove_selected_list_item(SettingsUi *ui, int row);
+
 static void edit_list_button(SettingsUi *ui, int row, int x) {
     int fx, fy, fw, fh;
     settings_ui_row_field_rect(ui, row, &fx, &fy, &fw, &fh);
@@ -429,81 +477,167 @@ static void edit_list_button(SettingsUi *ui, int row, int x) {
     (void)fh;
     const int button_width = 32;
     const int gap = 6;
-    const int input_width = fw - button_width * 2 - gap * 2;
+    int input_width = fw - button_width * 2 - gap * 2;
     int plus_x = fx + input_width + gap;
     int minus_x = plus_x + button_width + gap;
-    SettingValue *value = &ui->page.values[row];
-
+    int selected = ui->list_selected_row == row
+                       ? ui->list_selected_item : -1;
+    ui->list_editor_open = 1;
+    ui->list_scroll = 0;
+    ui->list_selected_row = row;
     if (x >= plus_x && x < plus_x + button_width) {
-        size_t length = strlen(value->text);
-        int entries = list_item_count(value->text);
-        if (entries >= SETTINGS_MAX_LIST_ITEMS) {
-            snprintf(ui->status, sizeof(ui->status),
-                     gnuchan_lang_t("status_list_limit"),
-                     SETTINGS_MAX_LIST_ITEMS);
-            ui->status_failed = 1;
-            return;
-        }
-        if (length + 1 < sizeof(value->text) &&
-            (length == 0 || value->text[length - 1] != ';')) {
-            value->text[length++] = ';';
-            value->text[length] = '\0';
-        } else if (length + 1 >= sizeof(value->text)) {
-            snprintf(ui->status, sizeof(ui->status),
-                     gnuchan_lang_t("status_list_full"));
-            ui->status_failed = 1;
-            return;
-        }
-        ui->list_selected_row = row;
-        ui->list_selected_item = entries;
-        ui->list_editing = 1;
-        ui->focus_row = row;
-        ui->caret = (int)length;
-    } else if (x >= minus_x && x < minus_x + button_width) {
-        int selected = ui->list_selected_row == row
-                           ? ui->list_selected_item : -1;
-        size_t length = strlen(value->text);
-        int entries = list_item_count(value->text);
-        if (ui->list_editing && selected == entries &&
-            (length == 0 || value->text[length - 1] == ';')) {
-            if (length > 0) {
-                value->text[length - 1] = '\0';
-            }
-        } else if (selected >= 0) {
-            size_t start = 0;
-            size_t end = 0;
-            if (!list_item_bounds(value->text, selected, &start, &end)) {
-                return;
-            }
-            if (end < length && value->text[end] == ';') {
-                end++;
-            } else if (start > 0) {
-                start--;
-            }
-            memmove(value->text + start, value->text + end,
-                    length - end + 1);
-        } else {
-            return;
-        }
-        ui->list_selected_row = -1;
         ui->list_selected_item = -1;
         ui->list_editing = 0;
-        ui->focus_row = row;
-        ui->caret = (int)strlen(value->text);
+        ui->focus_row = UI_FOCUS_NONE;
+        add_list_item(ui, row);
+    } else if (x >= minus_x && x < minus_x + button_width) {
+        ui->list_selected_item = selected;
+        ui->list_editing = selected >= 0;
+        ui->focus_row = UI_FOCUS_NONE;
+        remove_selected_list_item(ui, row);
     } else {
-        int selected = list_item_at(ui, row, x);
-        if (selected >= 0) {
-            ui->list_selected_row = row;
-            ui->list_selected_item = selected;
-            ui->list_editing = 0;
-            ui->focus_row = row;
-        } else {
-            ui->list_selected_row = row;
-            ui->list_selected_item = -1;
+        ui->list_selected_item = -1;
+        ui->list_editing = 0;
+        ui->focus_row = UI_FOCUS_NONE;
+    }
+}
+
+static int list_editor_geometry(const SettingsUi *ui, int *x, int *y,
+                                int *width, int *height, int *visible) {
+    *x = UI_SIDEBAR_WIDTH + UI_MARGIN;
+    *y = UI_HEADER_HEIGHT + UI_MARGIN;
+    *width = ui->window_width - *x - UI_MARGIN;
+    *height = ui->window_height - UI_FOOTER_HEIGHT - *y - UI_MARGIN;
+    *visible = (*height - UI_LIST_EDITOR_HEADER - UI_LIST_EDITOR_FOOTER) /
+               UI_LIST_EDITOR_ROW_HEIGHT;
+    return *width > 0 && *height > UI_LIST_EDITOR_HEADER +
+                                      UI_LIST_EDITOR_FOOTER &&
+           *visible > 0;
+}
+
+static void add_list_item(SettingsUi *ui, int row) {
+    SettingValue *value = &ui->page.values[row];
+    int entries = list_item_count(value->text);
+    if (ui->list_editing && ui->list_selected_item == entries) {
+        return;
+    }
+    if (entries >= SETTINGS_MAX_LIST_ITEMS) {
+        snprintf(ui->status, sizeof(ui->status),
+                 gnuchan_lang_t("status_list_limit"), SETTINGS_MAX_LIST_ITEMS);
+        ui->status_failed = 1;
+        return;
+    }
+    size_t length = strlen(value->text);
+    size_t extra = length > 0 && value->text[length - 1] != ';' ? 3 : 2;
+    if (length + extra > sizeof(value->text)) {
+        snprintf(ui->status, sizeof(ui->status),
+                 gnuchan_lang_t("status_list_full"));
+        ui->status_failed = 1;
+        return;
+    }
+    ui->list_selected_row = row;
+    ui->list_selected_item = entries;
+    ui->list_editing = 1;
+    ui->focus_row = row;
+    ui->caret = 0;
+    int left, top, width, height, visible;
+    if (list_editor_geometry(ui, &left, &top, &width, &height, &visible)) {
+        int maximum = entries + 1 - visible;
+        ui->list_scroll = maximum > 0 ? maximum : 0;
+    }
+    (void)left;
+    (void)top;
+    (void)width;
+    (void)height;
+}
+
+static void remove_selected_list_item(SettingsUi *ui, int row) {
+    SettingValue *value = &ui->page.values[row];
+    int entries = list_item_count(value->text);
+    int selected = ui->list_selected_row == row
+                       ? ui->list_selected_item : -1;
+    if (selected == entries && ui->list_editing) {
+        ui->list_selected_item = -1;
+        ui->list_editing = 0;
+        ui->focus_row = UI_FOCUS_NONE;
+        ui->list_scroll = 0;
+        return;
+    }
+    if (selected < 0 || selected >= entries) {
+        return;
+    }
+    size_t start = 0;
+    size_t end = 0;
+    size_t length = strlen(value->text);
+    if (!list_item_bounds(value->text, selected, &start, &end)) {
+        return;
+    }
+    if (end < length && value->text[end] == ';') {
+        end++;
+    } else if (start > 0) {
+        start--;
+    }
+    memmove(value->text + start, value->text + end, length - end + 1);
+    ui->list_selected_item = -1;
+    ui->list_editing = 0;
+    ui->focus_row = UI_FOCUS_NONE;
+    ui->list_scroll = 0;
+}
+
+static void handle_list_editor_click(SettingsUi *ui, int x, int y) {
+    int left, top, width, height, visible;
+    if (!list_editor_geometry(ui, &left, &top, &width, &height, &visible)) {
+        ui->list_editor_open = 0;
+        return;
+    }
+    int row = ui->list_selected_row;
+    int entries = list_item_count(ui->page.values[row].text);
+    int list_top = top + UI_LIST_EDITOR_HEADER;
+    int list_bottom = top + height - UI_LIST_EDITOR_FOOTER;
+    int button_y = top + height - UI_LIST_EDITOR_FOOTER + 6;
+    int button_width = 72;
+    int gap = 8;
+    int done_x = left + width - 12 - button_width;
+    int remove_x = done_x - gap - button_width;
+    int add_x = remove_x - gap - button_width;
+
+    if (y >= button_y && y < button_y + 34) {
+        if (x >= add_x && x < add_x + button_width) {
+            add_list_item(ui, row);
+        } else if (x >= remove_x && x < remove_x + button_width) {
+            remove_selected_list_item(ui, row);
+        } else if (x >= done_x && x < done_x + button_width) {
+            ui->list_editor_open = 0;
             ui->list_editing = 0;
             ui->focus_row = UI_FOCUS_NONE;
         }
+        return;
     }
+
+    if (x >= left && x < left + width && y >= list_top &&
+        y < list_bottom) {
+        int index = ui->list_scroll +
+                    (y - list_top) / UI_LIST_EDITOR_ROW_HEIGHT;
+        if (index >= entries && index == entries &&
+            ui->list_editing && ui->list_selected_item == entries) {
+            ui->caret = 0;
+        } else if (index >= 0 && index < entries) {
+            ui->list_selected_item = index;
+            ui->list_editing = 1;
+            ui->focus_row = row;
+            size_t start = 0;
+            size_t end = 0;
+            if (list_item_bounds(ui->page.values[row].text, index,
+                                 &start, &end)) {
+                ui->caret = (int)(end - start);
+            }
+        }
+        return;
+    }
+    (void)visible;
+    ui->list_editor_open = 0;
+    ui->list_editing = 0;
+    ui->focus_row = UI_FOCUS_NONE;
 }
 
 static void handle_key(SettingsUi *ui, XKeyEvent *key) {
@@ -514,6 +648,12 @@ static void handle_key(SettingsUi *ui, XKeyEvent *key) {
 
     switch (symbol) {
     case XK_Escape:
+        if (ui->list_editor_open) {
+            ui->list_editor_open = 0;
+            ui->list_editing = 0;
+            ui->focus_row = UI_FOCUS_NONE;
+            return;
+        }
         /* Escape puts an open list away first, and only closes the panel when
            there is no list to close. */
         if (ui->dropdown_row >= 0) {
@@ -525,7 +665,58 @@ static void handle_key(SettingsUi *ui, XKeyEvent *key) {
     case XK_BackSpace:
         field_backspace(ui);
         return;
+    case XK_Left:
+        if (ui->list_editor_open && ui->list_editing && ui->caret > 0) {
+            size_t start = 0;
+            size_t end = 0;
+            if (ui->list_selected_item <
+                    list_item_count(ui->page.values[ui->focus_row].text) &&
+                list_item_bounds(ui->page.values[ui->focus_row].text,
+                                 ui->list_selected_item, &start, &end)) {
+                ui->caret = (int)utf8_previous_offset(
+                    ui->page.values[ui->focus_row].text + start,
+                    (size_t)ui->caret);
+            }
+        }
+        return;
+    case XK_Right:
+        if (ui->list_editor_open && ui->list_editing &&
+            ui->focus_row >= 0) {
+            int row = ui->focus_row;
+            size_t start = 0;
+            size_t end = 0;
+            if (ui->list_selected_item <
+                    list_item_count(ui->page.values[row].text) &&
+                list_item_bounds(ui->page.values[row].text,
+                                 ui->list_selected_item, &start, &end) &&
+                (size_t)ui->caret < end - start) {
+                ui->caret = (int)utf8_next_offset(
+                    ui->page.values[row].text + start, (size_t)ui->caret);
+            }
+        }
+        return;
+    case XK_Home:
+        if (ui->list_editor_open && ui->list_editing) {
+            ui->caret = 0;
+        }
+        return;
+    case XK_End:
+        if (ui->list_editor_open && ui->list_editing &&
+            ui->focus_row >= 0) {
+            size_t start = 0;
+            size_t end = 0;
+            if (ui->list_selected_item <
+                    list_item_count(ui->page.values[ui->focus_row].text) &&
+                list_item_bounds(ui->page.values[ui->focus_row].text,
+                                 ui->list_selected_item, &start, &end)) {
+                ui->caret = (int)(end - start);
+            }
+        }
+        return;
     case XK_Tab:
+        if (ui->list_editor_open) {
+            return;
+        }
         if (ui->page.app->setting_count > 0) {
             ui->focus_row = (ui->focus_row + 1) % ui->page.app->setting_count;
             ui->caret = (int)strlen(ui->page.values[ui->focus_row].text);
@@ -557,6 +748,11 @@ static void handle_click(SettingsUi *ui, XButtonEvent *press) {
     }
     int x = press->x;
     int y = press->y;
+
+    if (ui->list_editor_open) {
+        handle_list_editor_click(ui, x, y);
+        return;
+    }
 
     int bx, by, bw, bh;
     settings_ui_save_rect(ui, &bx, &by, &bw, &bh);
@@ -639,6 +835,40 @@ static void handle_motion(SettingsUi *ui, XMotionEvent *motion) {
 /* The wheel over the body scrolls the rows, kept inside the list so a person
    cannot scroll past the last setting into empty space. */
 static void handle_wheel(SettingsUi *ui, XButtonEvent *press) {
+    if (ui->list_editor_open) {
+        int left, top, width, height, visible;
+        if (!list_editor_geometry(ui, &left, &top, &width, &height,
+                                  &visible)) {
+            return;
+        }
+        int entries =
+            list_item_count(ui->page.values[ui->list_selected_row].text);
+        int total = entries +
+                    (ui->list_editing &&
+                             ui->list_selected_item == entries
+                         ? 1 : 0);
+        int maximum = total - visible;
+        if (maximum < 0) {
+            maximum = 0;
+        }
+        if (press->button == Button4) {
+            ui->list_scroll--;
+        } else if (press->button == Button5) {
+            ui->list_scroll++;
+        } else {
+            return;
+        }
+        if (ui->list_scroll < 0) {
+            ui->list_scroll = 0;
+        } else if (ui->list_scroll > maximum) {
+            ui->list_scroll = maximum;
+        }
+        (void)left;
+        (void)top;
+        (void)width;
+        (void)height;
+        return;
+    }
     int rows = ui->page.app->setting_count;
     int visible = settings_ui_visible_rows(ui);
     int maximum = rows - visible;

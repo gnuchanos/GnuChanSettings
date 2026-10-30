@@ -50,6 +50,9 @@
 /* The height of one name in an open dropdown. Shorter than a row, because a
    list of names is read as a list and not as a column of fields. */
 #define UI_CHOICE_HEIGHT 30
+#define UI_LIST_EDITOR_ROW_HEIGHT 30
+#define UI_LIST_EDITOR_HEADER 44
+#define UI_LIST_EDITOR_FOOTER 48
 
 /* Which row holds the keyboard. -1 means none, which is the state the panel
    opens in — nothing is focused until a person clicks a field. */
@@ -92,7 +95,9 @@ typedef struct SettingsUi {
     int           dropdown_row;    /* the choice row whose list is open, -1   */
     int           list_selected_row;
     int           list_selected_item;
-    int           list_editing;
+    int           list_editing;       /* selected item accepts keyboard input */
+    int           list_editor_open;   /* the expanded, row-based list editor */
+    int           list_scroll;        /* first visible item in that editor */
 
     /* The window's actual size, which changes when the window manager resizes
        or maximizes it. The panel relays out itself against these numbers. */

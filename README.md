@@ -29,10 +29,14 @@ choices configure system and per-user locales; applications without translated
 message catalogs continue to display their existing strings.
 
 The GnuChanRunner category has a `Run in GnuChanTerm` list. Use `+` to add a
-program name or executable name and `-` to remove the last entry; selected
+program name or executable name and `-` to remove the selected entry; selected
 programs open in GnuChanTerm when launched from Runner. The separate Autostart
 category edits GnuChanWM's login command list, including commands with
-arguments, and saves it as `gcl_autostart.all`.
+arguments, and saves it as `gcl_autostart.all`. Click a list field to open its
+item editor; commands are shown as separate selectable rows, and a selected
+command can be inspected and edited with the keyboard (use Home/End and the
+arrow keys to move through long commands). Use `+` to add an item, `-` to
+remove the selected item, and the mouse wheel to scroll longer lists.
 
 The makefile takes an action as its first argument: `install` (the default),
 `build`, `run` and `uninstall`.

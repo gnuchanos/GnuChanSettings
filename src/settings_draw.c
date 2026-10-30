@@ -205,15 +205,15 @@ static void draw_list_field(SettingsUi *ui, int row, int x, int y, int width,
     const int gap = 6;
     int input_width = width - button_width * 2 - gap * 2;
     fill_rounded(ui, ui->style.panel, x, y, input_width, height, 6);
-    outline_rect(ui, row == ui->focus_row ? ui->style.accent
+    outline_rect(ui, ui->list_editor_open &&
+                             ui->list_selected_row == row
+                         ? ui->style.accent
                                           : ui->style.panel_edge,
                  x, y, input_width, height);
 
-    int item_x = x + 5;
-    int inner_right = x + input_width - 5;
+    int item_count = 0;
     const char *entry = value->text;
-    int item_index = 0;
-    while (*entry && item_x < inner_right) {
+    while (*entry) {
         const char *end = strchr(entry, ';');
         size_t length = end ? (size_t)(end - entry) : strlen(entry);
         while (length > 0 && isspace((unsigned char)entry[length - 1])) {
@@ -224,31 +224,7 @@ static void draw_list_field(SettingsUi *ui, int row, int x, int y, int width,
             length--;
         }
         if (length > 0) {
-            char item[SETTINGS_TEXT_LENGTH];
-            size_t copy = length < sizeof(item) - 1 ? length : sizeof(item) - 1;
-            memcpy(item, entry, copy);
-            item[copy] = '\0';
-            int chip_width = text_width(ui, ui->style.font, item) + 16;
-            if (chip_width > inner_right - item_x) {
-                chip_width = inner_right - item_x;
-            }
-            if (chip_width > 8) {
-                unsigned long chip_colour =
-                    ui->list_selected_row == row &&
-                            ui->list_selected_item == item_index
-                        ? ui->style.accent : ui->style.sidebar_active;
-                fill_rounded(ui, chip_colour, item_x, y + 6,
-                             chip_width, height - 12, 5);
-                XftColor text = xft_from_pixel(ui, ui->style.text);
-                char shown[SETTINGS_TEXT_LENGTH];
-                fit_text(ui, ui->style.font, item, chip_width - 10, shown,
-                         sizeof(shown));
-                draw_text(ui, &text, ui->style.font, item_x + 6,
-                          y + height / 2 + 5, shown);
-                XftColorFree(ui->display, ui->visual, ui->colormap, &text);
-                item_x += chip_width + 4;
-            }
-            item_index++;
+            item_count++;
         }
         if (!end) {
             break;
@@ -256,12 +232,16 @@ static void draw_list_field(SettingsUi *ui, int row, int x, int y, int width,
         entry = end + 1;
     }
 
-    if (row == ui->focus_row && value->text[0] &&
-        value->text[strlen(value->text) - 1] == ';' && item_x < inner_right) {
-        fill_rounded(ui, ui->style.panel_edge, item_x, y + 6,
-                     inner_right - item_x, height - 12, 5);
-        fill_rect(ui, ui->style.accent, item_x + 5, y + 12, 2, height - 24);
-    }
+    char summary[SETTINGS_TEXT_LENGTH];
+    snprintf(summary, sizeof(summary), "%d item%s — click to edit",
+             item_count, item_count == 1 ? "" : "s");
+    char shown[SETTINGS_TEXT_LENGTH];
+    fit_text(ui, ui->style.font, summary, input_width - 16, shown,
+             sizeof(shown));
+    XftColor summary_colour = xft_from_pixel(ui, ui->style.text_muted);
+    draw_text(ui, &summary_colour, ui->style.font, x + 8,
+              y + height / 2 + 5, shown);
+    XftColorFree(ui->display, ui->visual, ui->colormap, &summary_colour);
 
     const char *labels[] = { "+", "-" };
     for (int i = 0; i < 2; i++) {
@@ -275,6 +255,154 @@ static void draw_list_field(SettingsUi *ui, int row, int x, int y, int width,
                   y + height / 2 + 5, labels[i]);
         XftColorFree(ui->display, ui->visual, ui->colormap, &text);
     }
+}
+
+static int draw_list_item_bounds(const char *text, int wanted,
+                                 size_t *item_start, size_t *item_end);
+
+static void draw_list_editor(SettingsUi *ui) {
+    if (!ui->list_editor_open || ui->list_selected_row < 0 ||
+        ui->list_selected_row >= ui->page.app->setting_count) {
+        return;
+    }
+
+    int x = UI_SIDEBAR_WIDTH + UI_MARGIN;
+    int y = UI_HEADER_HEIGHT + UI_MARGIN;
+    int width = ui->window_width - x - UI_MARGIN;
+    int height = ui->window_height - UI_FOOTER_HEIGHT - y - UI_MARGIN;
+    int visible = (height - UI_LIST_EDITOR_HEADER - UI_LIST_EDITOR_FOOTER) /
+                  UI_LIST_EDITOR_ROW_HEIGHT;
+    if (width <= 0 || visible <= 0) {
+        return;
+    }
+
+    fill_rounded(ui, ui->style.sidebar, x, y, width, height, 8);
+    outline_rect(ui, ui->style.accent, x, y, width, height);
+    XftColor text = xft_from_pixel(ui, ui->style.text);
+    XftColor muted = xft_from_pixel(ui, ui->style.text_muted);
+    XftColor accent = xft_from_pixel(ui, ui->style.accent);
+    const SettingValue *value = &ui->page.values[ui->list_selected_row];
+
+    draw_text(ui, &text, ui->style.font_bold, x + 12, y + 27,
+              ui->page.app->settings[ui->list_selected_row].label);
+    draw_text(ui, &muted, ui->style.font, x + 12, y + 43,
+              "Select a command; use Home/End and arrows to inspect long text.");
+
+    int list_top = y + UI_LIST_EDITOR_HEADER;
+    int item_count = 0;
+    const char *scan = value->text;
+    while (*scan) {
+        const char *end = strchr(scan, ';');
+        size_t length = end ? (size_t)(end - scan) : strlen(scan);
+        while (length > 0 && isspace((unsigned char)scan[length - 1])) {
+            length--;
+        }
+        while (length > 0 && isspace((unsigned char)*scan)) {
+            scan++;
+            length--;
+        }
+        if (length > 0) {
+            item_count++;
+        }
+        if (!end) {
+            break;
+        }
+        scan = end + 1;
+    }
+    int total = item_count + (ui->list_editing &&
+                               ui->list_selected_item == item_count ? 1 : 0);
+    for (int visible_index = 0; visible_index < visible; visible_index++) {
+        int index = ui->list_scroll + visible_index;
+        if (index >= total) {
+            break;
+        }
+        int item_y = list_top + visible_index * UI_LIST_EDITOR_ROW_HEIGHT;
+        int selected = ui->list_selected_item == index &&
+                       ui->list_selected_row == ui->focus_row;
+        fill_rect(ui, selected ? ui->style.sidebar_active : ui->style.panel,
+                  x + 8, item_y, width - 16, UI_LIST_EDITOR_ROW_HEIGHT - 2);
+        outline_rect(ui, selected ? ui->style.accent : ui->style.panel_edge,
+                     x + 8, item_y, width - 16, UI_LIST_EDITOR_ROW_HEIGHT - 2);
+
+        char item[SETTINGS_TEXT_LENGTH] = "";
+        size_t start = 0;
+        size_t end = 0;
+        if (index < item_count &&
+            draw_list_item_bounds(value->text, index, &start, &end)) {
+            size_t length = end - start;
+            if (length >= sizeof(item)) {
+                length = sizeof(item) - 1;
+            }
+            memcpy(item, value->text + start, length);
+            item[length] = '\0';
+        } else if (index == item_count) {
+            snprintf(item, sizeof(item), "New item — type command here");
+        }
+
+        char shown[SETTINGS_TEXT_LENGTH];
+        int caret_x = -1;
+        if (selected && ui->list_editing && index < item_count) {
+            size_t item_length = strlen(item);
+            size_t caret = (size_t)(ui->caret < 0 ? 0 : ui->caret);
+            if (caret > item_length) {
+                caret = item_length;
+            }
+            size_t start_at = 0;
+            while (start_at < caret &&
+                   text_width(ui, ui->style.font,
+                              item + start_at) > width - 42) {
+                start_at++;
+                while (start_at < caret &&
+                       ((unsigned char)item[start_at] & 0xc0) == 0x80) {
+                    start_at++;
+                }
+            }
+            fit_text(ui, ui->style.font, item + start_at, width - 40,
+                     shown, sizeof(shown));
+            char caret_part[SETTINGS_TEXT_LENGTH];
+            size_t caret_length = caret - start_at;
+            if (caret_length >= sizeof(caret_part)) {
+                caret_length = sizeof(caret_part) - 1;
+            }
+            memcpy(caret_part, item + start_at, caret_length);
+            caret_part[caret_length] = '\0';
+            caret_x = x + 16 + text_width(ui, ui->style.font, caret_part);
+        } else if (selected && ui->list_editing && index == item_count) {
+            caret_x = x + 16;
+        } else {
+            fit_text(ui, ui->style.font, item, width - 40, shown,
+                     sizeof(shown));
+        }
+        draw_text(ui, selected ? &accent : &text, ui->style.font,
+                  x + 16, item_y + 20, shown);
+        if (caret_x >= 0) {
+            fill_rect(ui, ui->style.accent, caret_x, item_y + 5, 2,
+                      UI_LIST_EDITOR_ROW_HEIGHT - 12);
+        }
+    }
+
+    int button_width = 72;
+    int gap = 8;
+    int button_y = y + height - UI_LIST_EDITOR_FOOTER + 6;
+    int done_x = x + width - 12 - button_width;
+    int remove_x = done_x - gap - button_width;
+    int add_x = remove_x - gap - button_width;
+    const char *labels[] = { "+", "-", "Done" };
+    int positions[] = { add_x, remove_x, done_x };
+    for (int i = 0; i < 3; i++) {
+        fill_rounded(ui, ui->style.panel, positions[i], button_y,
+                     button_width, 34, 6);
+        outline_rect(ui, ui->style.panel_edge, positions[i], button_y,
+                     button_width, 34);
+        int label_width = text_width(ui, ui->style.font_bold, labels[i]);
+        draw_text(ui, &text, ui->style.font_bold,
+                  positions[i] + (button_width - label_width) / 2,
+                  button_y + 22, labels[i]);
+    }
+
+    XftColorFree(ui->display, ui->visual, ui->colormap, &text);
+    XftColorFree(ui->display, ui->visual, ui->colormap, &muted);
+    XftColorFree(ui->display, ui->visual, ui->colormap, &accent);
 }
 
 /* A choice row: the current name, and a caret saying it opens a list. */
@@ -331,6 +459,39 @@ static void draw_dropdown(SettingsUi *ui) {
 
     XftColorFree(ui->display, ui->visual, ui->colormap, &text);
     XftColorFree(ui->display, ui->visual, ui->colormap, &accent);
+}
+
+static int draw_list_item_bounds(const char *text, int wanted,
+                                 size_t *item_start, size_t *item_end) {
+    size_t start = 0;
+    int item = 0;
+    size_t text_length = strlen(text);
+    while (start < text_length) {
+        size_t end = start;
+        while (end < text_length && text[end] != ';') {
+            end++;
+        }
+        size_t visible_start = start;
+        size_t visible_end = end;
+        while (visible_start < visible_end &&
+               isspace((unsigned char)text[visible_start])) {
+            visible_start++;
+        }
+        while (visible_end > visible_start &&
+               isspace((unsigned char)text[visible_end - 1])) {
+            visible_end--;
+        }
+        if (visible_start < visible_end && item++ == wanted) {
+            *item_start = start;
+            *item_end = end;
+            return 1;
+        }
+        if (end == text_length) {
+            break;
+        }
+        start = end + 1;
+    }
+    return 0;
 }
 
 static void draw_switch(SettingsUi *ui, int x, int y, int height,
@@ -538,6 +699,7 @@ void settings_draw(SettingsUi *ui) {
 
     /* The list is drawn last, so it sits over the rows it covers. */
     draw_dropdown(ui);
+    draw_list_editor(ui);
 
     /* The finished picture goes to the window in ONE copy: nothing is shown
        half-drawn, which is what removes the flicker the panel had when every
