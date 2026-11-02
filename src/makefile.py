@@ -38,6 +38,7 @@ BATTERY_MONITOR = ROOT / "GnuChanBatteryMonitor.py"
 SOURCES = (
     "settings_store.c",
     "settings_apps.c",
+    "settings_theme.c",
     "settings_style.c",
     "settings_ui.c",
     "settings_draw.c",
@@ -46,6 +47,7 @@ SOURCES = (
 )
 HEADERS = (
     "settings_types.h",
+    "settings_theme.h",
     "settings_store.h",
     "settings_style.h",
     "settings_ui.h",
@@ -220,6 +222,65 @@ def build() -> Path:
     return output
 
 
+def integration_test() -> int:
+    BUILD.mkdir(parents=True, exist_ok=True)
+    integration_source = ROOT / "tests" / "test_settings_integrations.c"
+    if not integration_source.is_file():
+        raise SystemExit("error: Settings integration-test source is missing")
+    integration_binary = BUILD / "test_settings_integrations"
+    integration_command = [
+        "gcc", "-std=c99", "-Wall", "-Wextra",
+        "-D_DEFAULT_SOURCE", "-I", str(ROOT),
+        str(integration_source), str(ROOT / "settings_store.c"),
+        str(ROOT / "settings_apps.c"), str(ROOT / "settings_theme.c"),
+        "-o", str(integration_binary),
+    ]
+    step("Building GnuChanSettings integration tests")
+    if run(integration_command, cwd=ROOT).returncode != 0:
+        raise SystemExit("error: integration-test build failed")
+    detail("running settings category and file round-trip checks")
+    test_config = BUILD / f"settings-test-{os.getpid()}"
+    return run([str(integration_binary), str(test_config)],
+               cwd=ROOT).returncode
+
+
+def test() -> int:
+    if integration_test() != 0:
+        return 1
+
+    theme_source = ROOT / "tests" / "test_settings_theme.c"
+    if not theme_source.is_file():
+        detail("theme test source not present; skipping theme tests")
+        return 0
+
+    theme_root = BUILD / "theme-test-config"
+    theme_binary = BUILD / "test_settings_theme"
+    shutil.rmtree(theme_root, ignore_errors=True)
+    theme_root.mkdir(parents=True)
+    theme_command = [
+        "gcc", "-std=c99", "-Wall", "-Wextra", "-Werror",
+        "-D_DEFAULT_SOURCE", "-I", str(ROOT),
+        str(theme_source),
+        str(ROOT / "settings_store.c"),
+        str(ROOT / "settings_apps.c"),
+        str(ROOT / "settings_theme.c"),
+        "-o", str(theme_binary),
+    ]
+    try:
+        step("Building theme tests")
+        if run(theme_command, cwd=ROOT).returncode != 0:
+            raise SystemExit("error: theme-test build failed")
+        detail("running preset and config-preservation checks")
+        environment = {**os.environ,
+                       "GNUCHAN_THEME_TEST_CONFIG": str(theme_root)}
+        return run([str(theme_binary)], cwd=ROOT,
+                   environment=environment).returncode
+    finally:
+        shutil.rmtree(theme_root, ignore_errors=True)
+        if theme_binary.exists():
+            theme_binary.unlink()
+
+
 def desktop_entry() -> str:
     return "\n".join([
         "[Desktop Entry]",
@@ -300,7 +361,8 @@ def main() -> int:
         )
 
     action = sys.argv[1] if len(sys.argv) > 1 else "install"
-    known = ("install", "build", "run", "uninstall")
+    known = ("install", "build", "integration-test", "test", "run",
+             "uninstall")
     if action not in known:
         print(f"error: unknown action '{action}'", file=sys.stderr)
         print("usage: python3 makefile.py [" + "|".join(known) + "]",
@@ -317,6 +379,12 @@ def main() -> int:
     if action == "build":
         note(f"Built {build()}.")
         return 0
+
+    if action == "test":
+        return test()
+
+    if action == "integration-test":
+        return integration_test()
 
     if action == "run":
         return run_program(build())

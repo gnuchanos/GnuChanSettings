@@ -13,6 +13,8 @@
 #include <X11/Xlib.h>
 #include <X11/Xft/Xft.h>
 
+#include "settings_theme.h"
+
 /* The colours the panel is drawn in, resolved to pixels on this display. The
    names are what the panel MEANS by each one — a surface or a role — and not a
    description of the hue, so a different theme is a different set of values
@@ -35,7 +37,12 @@ typedef struct SettingsStyle {
 /* Build the style for this display and screen. Returns 0 on success, -1 when
    the display cannot provide what is needed; on failure nothing is left
    allocated. */
-int settings_style_load(SettingsStyle *style, Display *display, int screen);
+int settings_style_load(SettingsStyle *style, Display *display, int screen,
+                        const SettingsPalette *palette);
+
+/* Update the window palette after a saved theme change. */
+void settings_style_set_palette(SettingsStyle *style, Display *display,
+                                int screen, const SettingsPalette *palette);
 
 /* Release what settings_style_load() opened. Safe to call on a style that was
    never loaded. */

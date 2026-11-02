@@ -27,6 +27,7 @@
 #include "settings_draw.h"
 #include "settings_ui.h"
 #include "gnuchan_lang.h"
+#include "settings_theme.h"
 
 /* --- the geometry, computed in one place ----------------------------------- */
 
@@ -226,6 +227,14 @@ int settings_ui_choice_at(const SettingsUi *ui, int x, int y) {
 void settings_ui_load_page(SettingsUi *ui) {
     ui->page.app = &ui->apps[ui->app_index];
     ui->page.loaded = settings_load(ui->page.app, ui->page.values);
+    ui->saved_theme_color[0] = '\0';
+    for (int row = 0; row < ui->page.app->setting_count; row++) {
+        if (strcmp(ui->page.app->settings[row].key, "ThemeColor") == 0) {
+            snprintf(ui->saved_theme_color, sizeof(ui->saved_theme_color),
+                     "%s", ui->page.values[row].text);
+            break;
+        }
+    }
     ui->focus_row = UI_FOCUS_NONE;
     ui->hover_row = -1;
     ui->dropdown_row = -1;
@@ -285,9 +294,25 @@ static int apply_system_settings(SettingsUi *ui) {
     return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : -1;
 }
 
+static int find_setting(const AppDef *app, const char *key) {
+    if (!app || !key) {
+        return -1;
+    }
+    for (int row = 0; row < app->setting_count; row++) {
+        if (strcmp(app->settings[row].key, key) == 0) {
+            return row;
+        }
+    }
+    return -1;
+}
+
 static void save_page(SettingsUi *ui) {
-    if (strcmp(ui->page.app->dir, "GnuChanSettings") == 0 &&
-        strcmp(ui->page.app->file, "system.conf") == 0) {
+    int system_page = strcmp(ui->page.app->dir, "GnuChanSettings") == 0 &&
+                      strcmp(ui->page.app->file, "system.conf") == 0;
+    int theme_row = system_page ? find_setting(ui->page.app, "ThemeColor") : -1;
+    int apply_theme = 0;
+
+    if (system_page) {
         char *end = NULL;
         errno = 0;
         long threshold = strtol(ui->page.values[0].text, &end, 10);
@@ -298,10 +323,49 @@ static void save_page(SettingsUi *ui) {
             ui->status_failed = 1;
             return;
         }
+        SettingsPalette palette;
+        if (theme_row >= 0 &&
+            settings_theme_palette(ui->page.values[theme_row].text,
+                                   &palette) != 0) {
+            snprintf(ui->status, sizeof(ui->status),
+                     "Choose a valid system theme colour.");
+            ui->status_failed = 1;
+            return;
+        }
+        if (theme_row >= 0) {
+            apply_theme =
+                strcmp(ui->saved_theme_color,
+                       ui->page.values[theme_row].text) != 0;
+        }
     }
 
     char reason[SETTINGS_TEXT_LENGTH];
     if (settings_save(ui->page.app, ui->page.values, reason) == 0) {
+        if (apply_theme &&
+            settings_theme_apply(ui->page.values[theme_row].text, reason) != 0) {
+            snprintf(ui->status, sizeof(ui->status),
+                     "Settings saved, but theme application stopped: %.190s",
+                     reason);
+            ui->status_failed = 1;
+            return;
+        }
+        if (theme_row >= 0) {
+            snprintf(ui->saved_theme_color, sizeof(ui->saved_theme_color),
+                     "%s", ui->page.values[theme_row].text);
+        }
+        if (apply_theme) {
+            SettingsPalette palette;
+            if (settings_theme_palette(ui->page.values[theme_row].text,
+                                       &palette) == 0) {
+                settings_style_set_palette(&ui->style, ui->display,
+                                           ui->screen, &palette);
+                XSetWindowBackground(ui->display, ui->window,
+                                     ui->style.background);
+                XSetWindowBorder(ui->display, ui->window,
+                                 ui->style.panel_edge);
+                settings_draw(ui);
+            }
+        }
         if (apply_system_settings(ui) != 0) {
             snprintf(ui->status, sizeof(ui->status),
                      "Settings saved, but system changes were not applied.");
@@ -899,6 +963,27 @@ int settings_ui_open(SettingsUi *ui) {
     ui->hover_row = -1;
     ui->hover_category = -1;
     ui->app_index = 0;
+    ui->apps = settings_apps(&ui->app_count);
+
+    SettingsPalette palette;
+    settings_theme_palette("Purple", &palette);
+    for (int app_index = 0; app_index < ui->app_count; app_index++) {
+        const AppDef *app = &ui->apps[app_index];
+        if (strcmp(app->dir, "GnuChanSettings") != 0 ||
+            strcmp(app->file, "system.conf") != 0) {
+            continue;
+        }
+        SettingValue values[SETTINGS_MAX_ROWS];
+        if (settings_load(app, values) >= 0) {
+            int row = find_setting(app, "ThemeColor");
+            SettingsPalette saved_palette;
+            if (row >= 0 &&
+                settings_theme_palette(values[row].text, &saved_palette) == 0) {
+                palette = saved_palette;
+            }
+        }
+        break;
+    }
 
     ui->display = XOpenDisplay(NULL);
     if (!ui->display) {
@@ -911,14 +996,14 @@ int settings_ui_open(SettingsUi *ui) {
     ui->colormap = DefaultColormap(ui->display, ui->screen);
     ui->depth = DefaultDepth(ui->display, ui->screen);
 
-    if (settings_style_load(&ui->style, ui->display, ui->screen) != 0) {
+    if (settings_style_load(&ui->style, ui->display, ui->screen,
+                            &palette) != 0) {
         fprintf(stderr, "gnuchansettings: cannot load the fonts\n");
         XCloseDisplay(ui->display);
         ui->display = NULL;
         return -1;
     }
 
-    ui->apps = settings_apps(&ui->app_count);
     ui->gc = XCreateGC(ui->display, ui->root, 0, NULL);
     if (!ui->gc) {
         fprintf(stderr, "gnuchansettings: cannot create the graphics context\n");

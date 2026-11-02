@@ -43,7 +43,7 @@
 typedef struct Edit {
     size_t start;
     size_t end;
-    char   text[SETTINGS_TEXT_LENGTH * 4 + 32];
+    char   text[SETTINGS_TEXT_LENGTH * 4 + 33];
 } Edit;
 
 /* The style a row is written with: its own when it names one, the program's
@@ -313,6 +313,82 @@ static int find_line_value(const char *text, size_t len, const char *left_side,
     return 0;
 }
 
+/* Find a section body in a GKeyFile-style config and optionally the value of
+   one key inside it. Section bounds exclude the header and the next section. */
+static int find_ini_section(const char *text, size_t len, const char *section,
+                            size_t *body_start, size_t *body_end) {
+    size_t i = 0;
+    size_t section_start = (size_t)-1;
+    size_t section_end = len;
+    size_t section_len = strlen(section);
+
+    while (i < len) {
+        size_t line_start = i;
+        size_t line_end = i;
+        while (line_end < len && text[line_end] != '\n') {
+            line_end++;
+        }
+        size_t first = line_start;
+        while (first < line_end &&
+               (text[first] == ' ' || text[first] == '\t' ||
+                text[first] == '\r')) {
+            first++;
+        }
+        if (first < line_end && text[first] == '[') {
+            size_t close = first + 1;
+            while (close < line_end && text[close] != ']') {
+                close++;
+            }
+            if (close < line_end) {
+                size_t after = close + 1;
+                while (after < line_end &&
+                       (text[after] == ' ' || text[after] == '\t' ||
+                        text[after] == '\r')) {
+                    after++;
+                }
+                if (after == line_end || text[after] == '#' ||
+                    text[after] == ';') {
+                    size_t name_len = close - first - 1;
+                    if (section_start != (size_t)-1) {
+                        section_end = line_start;
+                        break;
+                    }
+                    if (name_len == section_len &&
+                        memcmp(text + first + 1, section, section_len) == 0) {
+                        section_start = line_end < len ? line_end + 1 : len;
+                    }
+                }
+            }
+        }
+        i = line_end < len ? line_end + 1 : len;
+    }
+
+    if (section_start == (size_t)-1) {
+        return 0;
+    }
+    *body_start = section_start;
+    *body_end = section_end;
+    return 1;
+}
+
+static int find_ini_value(const char *text, size_t len, const char *section,
+                          const char *key, size_t *vstart, size_t *vend) {
+    size_t start = 0;
+    size_t end = 0;
+    if (!find_ini_section(text, len, section, &start, &end)) {
+        return 0;
+    }
+    size_t value_start = 0;
+    size_t value_end = 0;
+    if (!find_line_value(text + start, end - start, key,
+                         &value_start, &value_end)) {
+        return 0;
+    }
+    *vstart = start + value_start;
+    *vend = start + value_end;
+    return 1;
+}
+
 /* Where a setting's value is, for the row's writing style. Returns 1 and fills
    the raw span. */
 static int locate(const char *text, size_t len, const AppDef *app,
@@ -337,6 +413,9 @@ static int locate(const char *text, size_t len, const AppDef *app,
     }
     if (style == SETTING_FLAT) {
         return find_line_value(text, len, def->key, vstart, vend);
+    }
+    if (style == SETTING_INI) {
+        return find_ini_value(text, len, call, def->key, vstart, vend);
     }
     if (style == SETTING_FUNC) {
         /* gcl_Window.set_active_window_border_color("#..."): a call whose name
@@ -846,6 +925,9 @@ static char *build_new_file(const AppDef *app, const SettingValue *values,
     if (style == SETTING_CALL) {
         snprintf(line, sizeof(line), "%s(\n", app->call);
         strncat(buffer, line, capacity - strlen(buffer) - 1);
+    } else if (style == SETTING_INI) {
+        snprintf(line, sizeof(line), "[%s]\n", app->call);
+        strncat(buffer, line, capacity - strlen(buffer) - 1);
     }
     for (int i = 0; i < app->setting_count; i++) {
         render_added(line, sizeof(line), app, &app->settings[i], &values[i]);
@@ -873,6 +955,14 @@ static size_t call_insert_point(const char *text, size_t length,
         scan = ae + 1;
     }
     return last;
+}
+
+static size_t ini_insert_point(const char *text, size_t length,
+                               const char *section) {
+    size_t section_start = 0;
+    size_t section_end = 0;
+    return find_ini_section(text, length, section, &section_start, &section_end)
+         ? section_end : length;
 }
 
 int settings_save(const AppDef *app, const SettingValue *values, char *reason) {
@@ -947,6 +1037,39 @@ int settings_save(const AppDef *app, const SettingValue *values, char *reason) {
         }
     }
 
+    if (row_style(app, app->settings) == SETTING_INI) {
+        size_t section_start = 0;
+        size_t section_end = 0;
+        if (!find_ini_section(text, length, app->call,
+                              &section_start, &section_end)) {
+            size_t section_len = strlen(app->call);
+            int needs_newline = length > 0 && text[length - 1] != '\n';
+            size_t addition = (needs_newline ? 1 : 0) + section_len + 4;
+            char *with_section = malloc(length + addition + 1);
+            if (!with_section) {
+                free(created);
+                snprintf(reason, SETTINGS_TEXT_LENGTH, "out of memory");
+                return -1;
+            }
+            memcpy(with_section, text, length);
+            size_t offset = length;
+            if (needs_newline) {
+                with_section[offset++] = '\n';
+            }
+            with_section[offset++] = '\n';
+            with_section[offset++] = '[';
+            memcpy(with_section + offset, app->call, section_len);
+            offset += section_len;
+            with_section[offset++] = ']';
+            with_section[offset++] = '\n';
+            with_section[offset] = '\0';
+            free(created);
+            created = with_section;
+            text = created;
+            length = offset;
+        }
+    }
+
     Edit edits[SETTINGS_MAX_EDITS];
     int edit_count = 0;
 
@@ -971,11 +1094,21 @@ int settings_save(const AppDef *app, const SettingValue *values, char *reason) {
                 if (point != (size_t)-1) {
                     at = point;
                 }
+            } else if (row_style(app, def) == SETTING_INI) {
+                at = ini_insert_point(text, length, row_call(app, def));
             }
             edits[edit_count].start = at;
             edits[edit_count].end = at;
-            render_added(edits[edit_count].text, sizeof(edits[edit_count].text),
-                         app, def, &values[i]);
+            char added[SETTINGS_TEXT_LENGTH * 4 + 32];
+            render_added(added, sizeof(added), app, def, &values[i]);
+            if (row_style(app, def) == SETTING_INI && at > 0 &&
+                text[at - 1] != '\n') {
+                snprintf(edits[edit_count].text,
+                         sizeof(edits[edit_count].text), "\n%s", added);
+            } else {
+                snprintf(edits[edit_count].text,
+                         sizeof(edits[edit_count].text), "%s", added);
+            }
             edit_count++;
         }
     }

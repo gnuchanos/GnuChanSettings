@@ -109,6 +109,8 @@ typedef struct SettingsUi {
     char status[SETTINGS_TEXT_LENGTH];
     int  status_failed;
 
+    char saved_theme_color[SETTINGS_TEXT_LENGTH];
+
     int running;
 } SettingsUi;
 

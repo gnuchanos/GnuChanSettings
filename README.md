@@ -22,6 +22,13 @@ and sends alerts through the session notification service.
 The System category configures the low-battery alert threshold (10% by default),
 TLP CPU profiles, a battery charge cap in Battery protection mode, the lid
 sleep action (suspend or hibernate), and English/Turkish locale preferences.
+The System / theme colour preset applies a coordinated palette to the Settings
+panel and the color settings managed for GnuChan applications. Presets include
+Purple (the existing default), Black, White, Gray, Blue, Green, Orange, Yellow,
+Red and Pink. Selecting a different preset and saving writes the choice to
+`~/.config/GnuChanSettings/system.conf` and updates relevant color values in
+each application's existing config format; semantic status colors such as
+danger, connected and warning indicators are retained.
 Battery charge thresholds are applied only on hardware supported by TLP.
 System changes requiring root use pkexec. Lid and locale changes take effect
 after the next login or reboot; TLP changes are applied when saved. Language
@@ -40,6 +47,20 @@ application reads. The Software Center prefers its `.conf` file and reads an
 older `.py` settings file only when no `.conf` exists. Screenshot and window
 manager settings are saved to their respective `.conf` files using the format
 each application expects.
+
+The GnuChanDesktop category edits its wallpaper path, solid background colour
+and wallpaper style in `~/.config/gnuchan-desktop/panel.conf`. The
+GnuChanFileManager category edits `show_hidden` and `start_location` in the
+`[General]` section of `~/.config/GnuChanFileManager/config.conf`; the panel
+preserves the sectioned format the file manager reads. GnuChanSound has no
+separate settings file: its language follows the shared GnuChan application
+language in `~/.config/GnuChanSettings/system.conf`, configurable from the
+GnuChanSound category.
+
+Run `python3 makefile.py integration-test` from `src/` to verify these
+categories and their settings-file round trips, including creation of the file
+manager's `[General]` section. `python3 makefile.py test` also runs available
+theme-preset tests.
 
 The GnuChanRunner category has a `Run in GnuChanTerm` list. Use `+` to add a
 program name or executable name and `-` to remove the selected entry; selected

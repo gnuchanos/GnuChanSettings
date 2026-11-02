@@ -54,7 +54,36 @@ static XftFont *open_font(Display *display, int screen, const char *name,
     return font;
 }
 
-int settings_style_load(SettingsStyle *style, Display *display, int screen) {
+void settings_style_set_palette(SettingsStyle *style, Display *display,
+                                int screen, const SettingsPalette *palette) {
+    if (!style || !display || !palette) {
+        return;
+    }
+    style->background =
+        settings_style_colour(display, screen, palette->background, 0x1a0b2e);
+    style->sidebar =
+        settings_style_colour(display, screen, palette->sidebar, 0x140826);
+    style->sidebar_active =
+        settings_style_colour(display, screen, palette->selection, 0x32143f);
+    style->panel =
+        settings_style_colour(display, screen, palette->panel, 0x241033);
+    style->panel_edge =
+        settings_style_colour(display, screen, palette->edge, 0x7b2cbf);
+    style->text =
+        settings_style_colour(display, screen, palette->text, 0xe0c3fc);
+    style->text_muted =
+        settings_style_colour(display, screen, palette->muted, 0x9d7bba);
+    style->accent =
+        settings_style_colour(display, screen, palette->accent, 0xc77dff);
+}
+
+int settings_style_load(SettingsStyle *style, Display *display, int screen,
+                        const SettingsPalette *palette) {
+    SettingsPalette fallback;
+    if (!palette) {
+        settings_theme_palette("Purple", &fallback);
+        palette = &fallback;
+    }
     style->background = 0x1a0b2e;
     style->sidebar = 0x140826;
     style->sidebar_active = 0x32143f;
@@ -71,22 +100,7 @@ int settings_style_load(SettingsStyle *style, Display *display, int screen) {
         return -1;
     }
 
-    style->background =
-        settings_style_colour(display, screen, COLOUR_BACKGROUND, style->background);
-    style->sidebar =
-        settings_style_colour(display, screen, COLOUR_SIDEBAR, style->sidebar);
-    style->sidebar_active =
-        settings_style_colour(display, screen, COLOUR_SIDEBAR_ACTIVE, style->sidebar_active);
-    style->panel =
-        settings_style_colour(display, screen, COLOUR_PANEL, style->panel);
-    style->panel_edge =
-        settings_style_colour(display, screen, COLOUR_PANEL_EDGE, style->panel_edge);
-    style->text =
-        settings_style_colour(display, screen, COLOUR_TEXT, style->text);
-    style->text_muted =
-        settings_style_colour(display, screen, COLOUR_TEXT_MUTED, style->text_muted);
-    style->accent =
-        settings_style_colour(display, screen, COLOUR_ACCENT, style->accent);
+    settings_style_set_palette(style, display, screen, palette);
     style->danger =
         settings_style_colour(display, screen, COLOUR_DANGER, style->danger);
 

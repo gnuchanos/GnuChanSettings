@@ -23,6 +23,7 @@
 #include <string.h>
 
 #include "settings_types.h"
+#include "settings_theme.h"
 
 /* Terse row builders. Each produces one SettingDef. */
 #define ROW(key, label, group, type, fallback) \
@@ -69,6 +70,9 @@ static const char *const screenshot_format_choices[] = {
     "png", "jpeg", NULL
 };
 static const char *const package_manager_choices[] = { "apt", NULL };
+static const char *const wallpaper_mode_choices[] = {
+    "fill", "fit", "center", "tile", NULL
+};
 
 static const SettingDef system_settings[] = {
     INT("BatteryWarningPercent", "Battery warning (%)", "Power", "10"),
@@ -79,6 +83,8 @@ static const SettingDef system_settings[] = {
            language_choices),
     CHOICE("ApplicationLanguage", "GnuChan language", "Language", "English",
            app_language_choices),
+    CHOICE("ThemeColor", "Theme color", "Appearance", "Purple",
+           settings_theme_presets),
 };
 
 /* --- GnuChanDock ----------------------------------------------------------- */
@@ -220,6 +226,29 @@ static const SettingDef software_center_settings[] = {
     CHOICE("PackageManager", "Package manager", "Updates", "apt",
            package_manager_choices),
     BOOL("RequireAuth", "Require authentication", "Security", "True"),
+};
+
+/* --- GnuChanDesktop -------------------------------------------------------- */
+
+static const SettingDef desktop_settings[] = {
+    TEXT("wallpaper", "Wallpaper image", "Wallpaper", ""),
+    COLOR("background_color", "Solid background", "Wallpaper", ""),
+    CHOICE("wallpaper_mode", "Wallpaper style", "Wallpaper", "fill",
+           wallpaper_mode_choices),
+};
+
+/* --- GnuChanFileManager ---------------------------------------------------- */
+
+static const SettingDef file_manager_settings[] = {
+    BOOL("show_hidden", "Show hidden files", "General", "false"),
+    TEXT("start_location", "Starting location", "General", "~"),
+};
+
+/* GnuChanSound reads the same shared application-language preference as the
+   other translated GnuChan applications; it does not have a separate config. */
+static const SettingDef sound_settings[] = {
+    CHOICE("ApplicationLanguage", "GnuChan application language", "Language",
+           "English", app_language_choices),
 };
 
 /* --- GnuChanRunner --------------------------------------------------------- */
@@ -484,6 +513,26 @@ static const AppDef app_table[] = {
         SETTING_FLAT, 1,
         software_center_settings, (int)(sizeof(software_center_settings) /
                                         sizeof(software_center_settings[0])),
+    },
+    {
+        "GnuChanSound", "PipeWire audio control and shared app language",
+        "GnuChanSettings", "system.conf", "",
+        SETTING_FLAT, 1,
+        sound_settings, (int)(sizeof(sound_settings) / sizeof(sound_settings[0])),
+    },
+    {
+        "GnuChanDesktop", "Wallpaper and display configuration",
+        "gnuchan-desktop", "panel.conf", "",
+        SETTING_FLAT, 0,
+        desktop_settings, (int)(sizeof(desktop_settings) /
+                                sizeof(desktop_settings[0])),
+    },
+    {
+        "GnuChanFileManager", "File browser preferences",
+        "GnuChanFileManager", "config.conf", "General",
+        SETTING_INI, 0,
+        file_manager_settings,
+        (int)(sizeof(file_manager_settings) / sizeof(file_manager_settings[0])),
     },
     {
         "GnuChanRunner", "The program launcher",

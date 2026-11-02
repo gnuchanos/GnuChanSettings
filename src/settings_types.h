@@ -37,7 +37,7 @@
 #define SETTINGS_MAX_LIST_ITEMS 16
 
 /* How many programs the panel knows how to configure. */
-#define SETTINGS_MAX_APPS 18
+#define SETTINGS_MAX_APPS 20
 
 /* What a value IS, which decides the control the window draws for it and the
    check the writer makes before it writes. */
@@ -60,6 +60,7 @@ typedef enum SettingStyle {
     SETTING_ASSIGN,  /* gcl_Switcher.name = "#..."  — a dotted line        */
     SETTING_FUNC,    /* gcl_Window.set_name("#...")  — a function's first
                         argument                                          */
+    SETTING_INI,     /* key = value inside the section named by AppDef.call */
 } SettingStyle;
 
 /* One setting: what to call it, where to find it, and what it holds. */
@@ -83,7 +84,7 @@ typedef struct AppDef {
     const char       *subtitle;   /* one line under it                    */
     const char       *dir;        /* ~/.config/<dir>/                     */
     const char       *file;       /* <file> inside that directory         */
-    const char       *call;       /* the call to add a missing argument to */
+    const char       *call;       /* call prefix, or INI section name       */
     SettingStyle      style;      /* how every row of this program is
                                      written unless a row says otherwise  */
     int               capital_bools; /* True/False or true/false         */
