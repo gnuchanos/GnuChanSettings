@@ -28,6 +28,19 @@ after the next login or reboot; TLP changes are applied when saved. Language
 choices configure system and per-user locales; applications without translated
 message catalogs continue to display their existing strings.
 
+The GnuChanDM, GnuChanDock, GnuChanFetch, GnuChanSL,
+GnuChanNotification and GnuChanSS categories use `Key = value` `.conf` files,
+the same plain format as `system.conf`. If only a legacy `.py` settings file is
+present, the panel reads its static values without executing it; saving creates
+the new `.conf` file.
+
+GnuChanTerm, GnuChanSoftwareCenter, GnuChanRunner, GnuChanWifi,
+GnuChanNetworkManager and GnuChanTop also edit the flat `.conf` file each
+application reads. The Software Center prefers its `.conf` file and reads an
+older `.py` settings file only when no `.conf` exists. Screenshot and window
+manager settings are saved to their respective `.conf` files using the format
+each application expects.
+
 The GnuChanRunner category has a `Run in GnuChanTerm` list. Use `+` to add a
 program name or executable name and `-` to remove the selected entry; selected
 programs open in GnuChanTerm when launched from Runner. The separate Autostart

@@ -638,9 +638,26 @@ int settings_load(const AppDef *app, SettingValue *values) {
     errno = 0;
     char *text = read_file(path, &length);
     if (!text) {
-        /* A missing file is not a failure: the panel opens on the defaults the
-           program itself would use, and the save creates the file. */
-        return errno == ENOENT ? 0 : -1;
+        if (errno != ENOENT) {
+            return -1;
+        }
+
+        /* Read old static call-style files without evaluating them. A save
+           still writes the new flat .conf file at the normal path. */
+        char legacy_path[SETTINGS_TEXT_LENGTH * 2];
+        snprintf(legacy_path, sizeof(legacy_path), "%s", path);
+        char *suffix = strrchr(legacy_path, '.');
+        if (suffix && strcmp(suffix, ".conf") == 0) {
+            strcpy(suffix, ".py");
+            text = read_file(legacy_path, &length);
+        }
+        if (!text) {
+            return errno == ENOENT ? 0 : -1;
+        }
+
+        AppDef legacy_app = *app;
+        legacy_app.style = SETTING_CALL;
+        app = &legacy_app;
     }
 
     for (int i = 0; i < app->setting_count; i++) {
@@ -658,6 +675,128 @@ int settings_load(const AppDef *app, SettingValue *values) {
     }
     free(text);
     return 1;
+}
+
+typedef struct LegacyValueSpan {
+    char key[SETTINGS_TEXT_LENGTH];
+    size_t start;
+    size_t end;
+} LegacyValueSpan;
+
+#define LEGACY_MAX_VALUES 256
+
+static void collect_legacy_call_values(const char *text, size_t start,
+                                       size_t end, LegacyValueSpan *values,
+                                       int *count) {
+    size_t i = start;
+    while (i < end) {
+        while (i < end &&
+               (isspace((unsigned char)text[i]) || text[i] == ',')) {
+            i++;
+        }
+        if (i >= end) {
+            break;
+        }
+        if (text[i] == '#') {
+            i = skip_comment(text, i, end);
+            continue;
+        }
+
+        size_t key_start = i;
+        while (i < end && is_name_char((unsigned char)text[i])) {
+            i++;
+        }
+        size_t key_length = i - key_start;
+        while (i < end && isspace((unsigned char)text[i])) {
+            i++;
+        }
+        if (!key_length || i >= end || text[i] != '=') {
+            i = scan_value_end(text, i, end);
+            if (i < end && text[i] != ',') {
+                i++;
+            }
+            continue;
+        }
+
+        i++;
+        while (i < end && isspace((unsigned char)text[i])) {
+            i++;
+        }
+        size_t value_start = i;
+        size_t value_end = scan_value_end(text, i, end);
+        trim_span(text, &value_start, &value_end);
+
+        if (key_length < SETTINGS_TEXT_LENGTH && value_start < value_end) {
+            int slot = -1;
+            for (int j = 0; j < *count; j++) {
+                if (strlen(values[j].key) == key_length &&
+                    memcmp(values[j].key, text + key_start, key_length) == 0) {
+                    slot = j;
+                    break;
+                }
+            }
+            if (slot < 0 && *count < LEGACY_MAX_VALUES) {
+                slot = (*count)++;
+                memcpy(values[slot].key, text + key_start, key_length);
+                values[slot].key[key_length] = '\0';
+            }
+            if (slot >= 0) {
+                values[slot].start = value_start;
+                values[slot].end = value_end;
+            }
+        }
+
+        i = value_end;
+        if (i < end && text[i] == ',') {
+            i++;
+        }
+    }
+}
+
+/* Convert only named values in the old static call blocks. Raw value spans are
+   copied unchanged, so lists and quoted strings keep their exact contents. */
+static char *migrate_legacy_file(const AppDef *app, const char *text,
+                                size_t length, size_t *out_length) {
+    LegacyValueSpan values[LEGACY_MAX_VALUES];
+    int count = 0;
+    size_t scan = 0;
+    size_t args_start = 0;
+    size_t args_end = 0;
+    while (find_call_from(text, length, app->call, scan,
+                          &args_start, &args_end)) {
+        collect_legacy_call_values(text, args_start, args_end, values, &count);
+        scan = args_end + 1;
+    }
+
+    size_t capacity = length + (size_t)count *
+                      (SETTINGS_TEXT_LENGTH + 8) + 128;
+    char *converted = malloc(capacity);
+    if (!converted) {
+        return NULL;
+    }
+    size_t used = (size_t)snprintf(
+        converted, capacity,
+        "# Migrated from the legacy static settings format.\n");
+    for (int i = 0; i < count; i++) {
+        int written = snprintf(converted + used, capacity - used, "%s = ",
+                               values[i].key);
+        if (written < 0 || (size_t)written >= capacity - used) {
+            free(converted);
+            return NULL;
+        }
+        used += (size_t)written;
+        size_t value_length = values[i].end - values[i].start;
+        if (value_length >= capacity - used) {
+            free(converted);
+            return NULL;
+        }
+        memcpy(converted + used, text + values[i].start, value_length);
+        used += value_length;
+        converted[used++] = '\n';
+        converted[used] = '\0';
+    }
+    *out_length = used;
+    return converted;
 }
 
 /* --- writing --------------------------------------------------------------- */
@@ -749,28 +888,63 @@ int settings_save(const AppDef *app, const SettingValue *values, char *reason) {
     size_t length = 0;
     char *text = read_file(path, &length);
     char *created = NULL;
+    int migrated_legacy = 0;
     if (!text) {
-        /* No file yet: build one whole. */
-        /* Make sure the directory chain exists so the file can be created. */
-        {
-            char dir[SETTINGS_TEXT_LENGTH * 2];
-            snprintf(dir, sizeof(dir), "%s", path);
-            char *last = strrchr(dir, '/');
-            if (last) {
-                *last = '\0';
-                if (dir[0] && mkdir_parents(dir) != 0) {
-                    snprintf(reason, SETTINGS_TEXT_LENGTH,
-                             "cannot create directory %.200s", dir);
-                    return -1;
-                }
-            }
-        }
-        created = build_new_file(app, values, &length);
-        if (!created) {
-            snprintf(reason, SETTINGS_TEXT_LENGTH, "out of memory");
+        if (errno != ENOENT) {
+            snprintf(reason, SETTINGS_TEXT_LENGTH,
+                     "cannot read settings: %.180s", path);
             return -1;
         }
-        text = created;
+
+        char legacy_path[SETTINGS_TEXT_LENGTH * 2];
+        snprintf(legacy_path, sizeof(legacy_path), "%s", path);
+        char *suffix = strrchr(legacy_path, '.');
+        char *legacy_text = NULL;
+        if (suffix && strcmp(suffix, ".conf") == 0) {
+            strcpy(suffix, ".py");
+            size_t legacy_length = 0;
+            legacy_text = read_file(legacy_path, &legacy_length);
+            if (legacy_text) {
+                created = migrate_legacy_file(app, legacy_text,
+                                              legacy_length, &length);
+                free(legacy_text);
+                if (!created) {
+                    snprintf(reason, SETTINGS_TEXT_LENGTH,
+                             "cannot safely migrate legacy settings");
+                    return -1;
+                }
+                text = created;
+                migrated_legacy = 1;
+            } else if (errno != ENOENT) {
+                snprintf(reason, SETTINGS_TEXT_LENGTH,
+                         "cannot read legacy settings: %.160s", legacy_path);
+                return -1;
+            }
+        }
+
+        if (!text) {
+            /* No file yet: build one whole. */
+            /* Make sure the directory chain exists so the file can be created. */
+            {
+                char dir[SETTINGS_TEXT_LENGTH * 2];
+                snprintf(dir, sizeof(dir), "%s", path);
+                char *last = strrchr(dir, '/');
+                if (last) {
+                    *last = '\0';
+                    if (dir[0] && mkdir_parents(dir) != 0) {
+                        snprintf(reason, SETTINGS_TEXT_LENGTH,
+                                 "cannot create directory %.200s", dir);
+                        return -1;
+                    }
+                }
+            }
+            created = build_new_file(app, values, &length);
+            if (!created) {
+                snprintf(reason, SETTINGS_TEXT_LENGTH, "out of memory");
+                return -1;
+            }
+            text = created;
+        }
     }
 
     Edit edits[SETTINGS_MAX_EDITS];
@@ -788,7 +962,7 @@ int settings_save(const AppDef *app, const SettingValue *values, char *reason) {
                          sizeof(edits[edit_count].text), def, &values[i],
                          app->capital_bools);
             edit_count++;
-        } else if (!created) {
+        } else if (!created || migrated_legacy) {
             /* The file does not name this setting. It is added so a person who
                changed it in the panel gets it saved, not silently dropped. */
             size_t at = length;

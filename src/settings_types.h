@@ -2,10 +2,10 @@
  * settings_types.h — the shape GnuChanSettings is built from.
  *
  * GnuChanSettings is the desktop's control panel: the one place a person who
- * does not want to edit a script opens, changes a colour, a size or a switch,
+ * does not want to edit a file by hand opens, changes a colour, a size or a switch,
  * and saves. Every Gnuchan program is configured by a settings file under
- * ~/.config that is written like a Python script, and this program is the GUI
- * over those files.
+ * ~/.config with plain Key = value lines, and this program is the GUI over
+ * those files.
  *
  * Nothing here knows about X. This header is plain data: WHAT a setting is,
  * what KIND of value it holds, and HOW the value is written in the file — the
@@ -55,7 +55,7 @@ typedef enum SettingType {
    the program's own style is" and is NEGATIVE so a zeroed row inherits. */
 typedef enum SettingStyle {
     SETTING_STYLE_INHERIT = -1, /* use the program's own style           */
-    SETTING_CALL,    /* gcl_X.Main(Key="value") — the argument of a call  */
+    SETTING_CALL,    /* legacy gcl_X.Main(Key="value") call format        */
     SETTING_FLAT,    /* Key = value            — a bare line             */
     SETTING_ASSIGN,  /* gcl_Switcher.name = "#..."  — a dotted line        */
     SETTING_FUNC,    /* gcl_Window.set_name("#...")  — a function's first

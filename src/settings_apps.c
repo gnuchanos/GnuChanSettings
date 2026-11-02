@@ -4,7 +4,7 @@
  * This is the one place that knows WHICH programs GnuChanSettings edits, where
  * each one keeps its settings, how that file is written, and which of its
  * settings are worth putting in front of a person. Every row here is a setting
- * that PROGRAM ACTUALLY READS — taken from its own config header and the .py
+ * that PROGRAM ACTUALLY READS — taken from its own config header and the .conf
  * it ships — and nothing else. A row that named a token no program looks for
  * would be a field a person could fill in and watch do nothing.
  *
@@ -97,7 +97,7 @@ static const SettingDef dock_settings[] = {
     INT("Margin",       "Margin from edge",  "Shape", "6"),
     INT("Corner",       "Corner radius",     "Shape", "16"),
     INT("Magnify",      "Magnify amount",    "Shape", "18"),
-    INT("MagnifyReach", "Magnify reach",     "Shape", "1"),
+    INT("MagnifyReach", "Magnify reach",     "Shape", "2"),
 
     TEXT("Font",         "Font",        "Label", "monospace:pixelsize=15"),
     BOOL("LabelEnabled", "Show labels", "Label", "True"),
@@ -327,10 +327,9 @@ static const SettingDef dm_settings[] = {
 
 /* --- GnuChanWM -------------------------------------------------------------
  *
- * The odd one: it writes its borders as gcl_Window.set_*(...) calls, the
- * switcher's colours as gcl_Switcher.* assignments, and its wallpaper as a
- * gcl_Window.* assignment — all in the same file. So every row here names its
- * own style and prefix rather than following the program's. */
+ * Borders are written as gcl_Window.set_*(...) calls, the switcher's colours
+ * as gcl_Switcher.* assignments, and wallpaper as a gcl_Window.* assignment.
+ * The rows name their own style and prefix because they share one file. */
 
 static const SettingDef wm_settings[] = {
     ROW_IN("set_active_window_border_color", "Active border", "Borders",
@@ -369,9 +368,9 @@ static const SettingDef wm_settings[] = {
 /* --- GnuChan Themes --------------------------------------------------------
  *
  * Which GTK theme, icon theme and mouse cursor the session uses. All three are
- * written as gcl_themes.*(...) calls in GnuChanWM.py — that is the file
- * wm_theme.c reads them from — so this category edits the same file the window
- * manager's own category does, and only the three theme calls are ever touched.
+ * written as gcl_themes.*(...) calls in GnuChanWM.conf, read by the window
+ * manager's config loader, so this category edits the same file as the window
+ * manager's own category, and only the three theme calls are ever touched.
  *
  * Only the PATH is offered. The name a theme is selected by is not a value a
  * person changes on this desktop: wm_theme.c's choose_theme() falls back to the
@@ -402,7 +401,7 @@ static const SettingDef theme_settings[] = {
 /* --- GnuChanNetworkManager -------------------------------------------------
  *
  * The general network manager: every interface, DNS, and the door to the wifi
- * manager. It writes a flat `Name = value` file (config.py) — no calls — so
+ * manager. It writes a flat `Name = value` file (config.conf) — no calls — so
  * every row here is SETTING_FLAT, the program's own style.
  *
  * The keys must match net_config.c's reader exactly: a name the reader does not
@@ -438,100 +437,100 @@ static const SettingDef net_settings[] = {
 static const AppDef app_table[] = {
     {
         "GnuChanDock", "The desktop dock",
-        "GnuChanDock", "GnuChanDock.py", "gcl_Dock.Main",
-        SETTING_CALL, 1,
+        "GnuChanDock", "GnuChanDock.conf", "gcl_Dock.Main",
+        SETTING_FLAT, 1,
         dock_settings, (int)(sizeof(dock_settings) / sizeof(dock_settings[0])),
     },
     {
         "GnuChanTerm", "The terminal",
-        "GnuChanTerm", "GnuChanTerm.py", "gcl_Terminal.call",
-        SETTING_CALL, 1,
+        "GnuChanTerm", "GnuChanTerm.conf", "",
+        SETTING_FLAT, 1,
         term_settings, (int)(sizeof(term_settings) / sizeof(term_settings[0])),
     },
     {
         "GnuChanFetch", "The system information program",
-        "GnuChanFetch", "GnuChanFetch.py", "gcl_Fetch.Main",
-        SETTING_CALL, 1,
+        "GnuChanFetch", "GnuChanFetch.conf", "gcl_Fetch.Main",
+        SETTING_FLAT, 1,
         fetch_settings, (int)(sizeof(fetch_settings) / sizeof(fetch_settings[0])),
     },
     {
         "GnuChanSS", "The screen saver",
-        "GnuChanSS", "GnuChanSS.py", "gcl_SS.Effect",
-        SETTING_CALL, 1,
+        "GnuChanSS", "GnuChanSS.conf", "gcl_SS.Effect",
+        SETTING_FLAT, 1,
         ss_settings, (int)(sizeof(ss_settings) / sizeof(ss_settings[0])),
     },
     {
         "GnuChanSL", "The lock screen",
-        "GnuChanSL", "GnuChanSL.py", "gcl_SL.Lock",
-        SETTING_CALL, 1,
+        "GnuChanSL", "GnuChanSL.conf", "gcl_SL.Lock",
+        SETTING_FLAT, 1,
         sl_settings, (int)(sizeof(sl_settings) / sizeof(sl_settings[0])),
     },
     {
         "GnuChanNotification", "The notification bubbles",
-        "GnuChanNotification", "GnuChanNotification.py", "gcl_Notification.Main",
-        SETTING_CALL, 1,
+        "GnuChanNotification", "GnuChanNotification.conf",
+        "gcl_Notification.Main", SETTING_FLAT, 1,
         notif_settings, (int)(sizeof(notif_settings) / sizeof(notif_settings[0])),
     },
     {
         "GnuChanScreenShoot", "Screenshot capture and storage",
-        "GnuChanScreenShoot", "GnuChanScreenShoot.py",
-        "gcl_Screenshot.Settings", SETTING_CALL, 1,
+        "GnuChanScreenShoot", "GnuChanScreenShoot.conf", "",
+        SETTING_FLAT, 1,
         screenshot_settings,
         (int)(sizeof(screenshot_settings) / sizeof(screenshot_settings[0])),
     },
     {
         "GnuChanSoftwareCenter", "Packages and GnuChan updates",
-        "GnuChanSoftwareCenter", "GnuChanSoftwareCenter.py",
-        "gcl_SoftwareCenter.Settings", SETTING_CALL, 1,
+        "GnuChanSoftwareCenter", "GnuChanSoftwareCenter.conf", "",
+        SETTING_FLAT, 1,
         software_center_settings, (int)(sizeof(software_center_settings) /
                                         sizeof(software_center_settings[0])),
     },
     {
         "GnuChanRunner", "The program launcher",
-        "GnuChanRunner", "config.py", "",
+        "GnuChanRunner", "config.conf", "",
         SETTING_FLAT, 0,
         runner_settings, (int)(sizeof(runner_settings) / sizeof(runner_settings[0])),
     },
     {
         "Autostart", "Programs and scripts started at login",
-        "GnuChanWM", "GnuChanWM.py", "gcl_autostart",
+        "GnuChanWM", "GnuChanWM.conf", "gcl_autostart",
         SETTING_ASSIGN, 1,
         autostart_settings,
         (int)(sizeof(autostart_settings) / sizeof(autostart_settings[0])),
     },
     {
         "GnuChanWifi", "The Wi-Fi manager",
-        "GnuChanWifi", "config.py", "",
+        "GnuChanWifi", "config.conf", "",
         SETTING_FLAT, 0,
         wifi_settings, (int)(sizeof(wifi_settings) / sizeof(wifi_settings[0])),
     },
     {
         "GnuChanNetworkManager", "Interfaces, DNS and the resolver",
-        "GnuChanNetworkManager", "config.py", "",
+        "GnuChanNetworkManager", "config.conf", "",
         SETTING_FLAT, 0,
         net_settings, (int)(sizeof(net_settings) / sizeof(net_settings[0])),
     },
     {
         "GnuChanTop", "The system monitor",
-        "GnuChanTop", "GnuChanTop.py", "",
+        "GnuChanTop", "GnuChanTop.conf", "",
         SETTING_FLAT, 0,
         top_settings, (int)(sizeof(top_settings) / sizeof(top_settings[0])),
     },
     {
         "GnuChanDM", "The login screen",
-        "GnuChanDM", "GnuChanDM.py", "gcl_DM.call",
-        SETTING_CALL, 1,
+        "GnuChanDM", "GnuChanDM.conf", "gcl_DM.call",
+        SETTING_FLAT, 1,
         dm_settings, (int)(sizeof(dm_settings) / sizeof(dm_settings[0])),
     },
     {
         "GnuChanWM", "The window manager",
-        "GnuChanWM", "GnuChanWM.py", "gcl_Window",
+        "GnuChanWM", "GnuChanWM.conf", "gcl_Window",
         SETTING_FUNC, 1,
         wm_settings, (int)(sizeof(wm_settings) / sizeof(wm_settings[0])),
     },
     {
         "GnuChan Themes", "GTK theme, icons and mouse cursor",
-        "GnuChanWM", "GnuChanWM.py", "gcl_themes",
+        "GnuChanWM", "GnuChanWM.conf", "gcl_themes",
         SETTING_CALL, 1,
         theme_settings, (int)(sizeof(theme_settings) / sizeof(theme_settings[0])),
     },

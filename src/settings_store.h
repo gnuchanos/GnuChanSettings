@@ -50,8 +50,8 @@ int settings_load(const AppDef *app, SettingValue *values);
 /* Write `values` back into the program's file.
  *
  * Only the values change: every line the panel did not touch is copied
- * through, byte for byte, and a file that did not exist is created with the
- * program's own call around the values so it is a file the program can read.
+ * through, byte for byte, and a file that did not exist is created in the
+ * format selected for that program (flat Key = value for migrated apps).
  * The write is atomic — a temporary file beside the target, then a rename — so
  * a crash mid-save leaves the old settings, never half of a new file.
  *
