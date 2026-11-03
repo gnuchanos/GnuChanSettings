@@ -35,13 +35,6 @@ int settings_ui_category_y(int index) {
     return UI_HEADER_HEIGHT + index * UI_CATEGORY_HEIGHT;
 }
 
-int settings_ui_category_at(const SettingsUi *ui, int y) {
-    if (y < UI_HEADER_HEIGHT) {
-        return -1;
-    }
-    return (y - UI_HEADER_HEIGHT) / UI_CATEGORY_HEIGHT;
-}
-
 int settings_ui_visible_rows(const SettingsUi *ui) {
     int body = ui->window_height - UI_HEADER_HEIGHT - UI_FOOTER_HEIGHT;
     int rows = body / UI_ROW_HEIGHT;
@@ -57,7 +50,7 @@ void settings_ui_row_field_rect(const SettingsUi *ui, int row,
     int shown = row - ui->scroll;
     int row_y = UI_HEADER_HEIGHT + shown * UI_ROW_HEIGHT;
     int content_width = ui->window_width - UI_SIDEBAR_WIDTH -
-                        2 * UI_MARGIN;
+                        2 * UI_MARGIN - UI_SCROLLBAR_GUTTER;
     int field_width = content_width / 2;
     if (field_width < UI_FIELD_WIDTH) {
         field_width = UI_FIELD_WIDTH;
@@ -69,7 +62,7 @@ void settings_ui_row_field_rect(const SettingsUi *ui, int row,
     if (field_width < 1) {
         field_width = 1;
     }
-    *x = ui->window_width - UI_MARGIN - field_width;
+    *x = ui->window_width - UI_MARGIN - UI_SCROLLBAR_GUTTER - field_width;
     *y = row_y + 8;
     *width = field_width;
     *height = UI_ROW_HEIGHT - 16;
@@ -184,6 +177,73 @@ void settings_ui_revert_rect(const SettingsUi *ui, int *x, int *y,
                              int *width, int *height) {
     settings_ui_save_rect(ui, x, y, width, height);
     *x -= (*width + 12);
+}
+
+static void set_scrollbar(SettingsUi *ui, int categories, int scroll) {
+    UiScrollbar bar;
+    if (!settings_ui_scrollbar_geometry(ui, categories, &bar)) {
+        return;
+    }
+    if (categories) {
+        ui->category_scroll = scroll;
+    } else {
+        ui->scroll = scroll;
+    }
+    int maximum = bar.maximum;
+    if (categories) {
+        ui->category_scroll = ui->category_scroll < 0
+                                  ? 0
+                                  : ui->category_scroll > maximum
+                                        ? maximum : ui->category_scroll;
+    } else {
+        ui->scroll = ui->scroll < 0 ? 0
+                     : ui->scroll > maximum ? maximum : ui->scroll;
+    }
+}
+
+static int handle_scrollbar_click(SettingsUi *ui, int x, int y) {
+    for (int categories = 1; categories >= 0; categories--) {
+        UiScrollbar bar;
+        if (!settings_ui_scrollbar_geometry(ui, categories, &bar) ||
+            x < bar.x - 3 || x >= bar.x + bar.width + 3 ||
+            y < bar.track_y || y >= bar.track_y + bar.track_height) {
+            continue;
+        }
+        int *scroll = categories ? &ui->category_scroll : &ui->scroll;
+        if (y < bar.thumb_y || y >= bar.thumb_y + bar.thumb_height) {
+            int page = categories ? settings_ui_visible_categories(ui)
+                                 : settings_ui_visible_rows(ui);
+            *scroll += y < bar.thumb_y ? -page : page;
+            set_scrollbar(ui, categories, *scroll);
+        } else {
+            ui->scrollbar_drag = categories ? 1 : 2;
+            ui->scrollbar_drag_y = y;
+            ui->scrollbar_drag_scroll = *scroll;
+        }
+        return 1;
+    }
+    return 0;
+}
+
+static void handle_scrollbar_drag(SettingsUi *ui, int y) {
+    if (ui->scrollbar_drag == 0) {
+        return;
+    }
+    int categories = ui->scrollbar_drag == 1;
+    UiScrollbar bar;
+    if (!settings_ui_scrollbar_geometry(ui, categories, &bar)) {
+        ui->scrollbar_drag = 0;
+        return;
+    }
+    int travel = bar.track_height - bar.thumb_height;
+    if (travel <= 0) {
+        return;
+    }
+    int delta = y - ui->scrollbar_drag_y;
+    int scroll = ui->scrollbar_drag_scroll +
+                 delta * bar.maximum / travel;
+    set_scrollbar(ui, categories, scroll);
+    settings_draw(ui);
 }
 
 /* The dropdown hangs directly under the field it belongs to, one name per
@@ -817,6 +877,9 @@ static void handle_click(SettingsUi *ui, XButtonEvent *press) {
         handle_list_editor_click(ui, x, y);
         return;
     }
+    if (handle_scrollbar_click(ui, x, y)) {
+        return;
+    }
 
     int bx, by, bw, bh;
     settings_ui_save_rect(ui, &bx, &by, &bw, &bh);
@@ -885,6 +948,12 @@ static void handle_click(SettingsUi *ui, XButtonEvent *press) {
 }
 
 static void handle_motion(SettingsUi *ui, XMotionEvent *motion) {
+    if (ui->scrollbar_drag != 0) {
+        if (motion->state & Button1Mask) {
+            handle_scrollbar_drag(ui, motion->y);
+        }
+        return;
+    }
     int row = settings_ui_row_at(ui, motion->x, motion->y);
     int category = motion->x < UI_SIDEBAR_WIDTH
                        ? settings_ui_category_at(ui, motion->y)
@@ -899,6 +968,30 @@ static void handle_motion(SettingsUi *ui, XMotionEvent *motion) {
 /* The wheel over the body scrolls the rows, kept inside the list so a person
    cannot scroll past the last setting into empty space. */
 static void handle_wheel(SettingsUi *ui, XButtonEvent *press) {
+    if (press->x < UI_SIDEBAR_WIDTH) {
+        if (press->y < UI_HEADER_HEIGHT ||
+            press->y >= ui->window_height) {
+            return;
+        }
+        int maximum = ui->app_count - settings_ui_visible_categories(ui);
+        if (maximum < 0) {
+            maximum = 0;
+        }
+        if (press->button == Button4) {
+            ui->category_scroll--;
+        } else if (press->button == Button5) {
+            ui->category_scroll++;
+        } else {
+            return;
+        }
+        if (ui->category_scroll < 0) {
+            ui->category_scroll = 0;
+        } else if (ui->category_scroll > maximum) {
+            ui->category_scroll = maximum;
+        }
+        settings_draw(ui);
+        return;
+    }
     if (ui->list_editor_open) {
         int left, top, width, height, visible;
         if (!list_editor_geometry(ui, &left, &top, &width, &height,
@@ -1016,7 +1109,8 @@ int settings_ui_open(SettingsUi *ui) {
     attributes.background_pixel = ui->style.background;
     attributes.border_pixel = ui->style.panel_edge;
     attributes.event_mask = ExposureMask | KeyPressMask | ButtonPressMask |
-                            PointerMotionMask | StructureNotifyMask;
+                            ButtonReleaseMask | PointerMotionMask |
+                            StructureNotifyMask;
     ui->window = XCreateWindow(ui->display, ui->root, 0, 0,
                                UI_WINDOW_WIDTH, UI_WINDOW_HEIGHT, 0,
                                ui->depth, InputOutput, ui->visual,
@@ -1033,14 +1127,9 @@ int settings_ui_open(SettingsUi *ui) {
     memset(&size_hints, 0, sizeof(size_hints));
     size_hints.flags = PMinSize;
     size_hints.min_width = UI_SIDEBAR_WIDTH + UI_FIELD_WIDTH +
-                           2 * UI_MARGIN + 180;
+                           2 * UI_MARGIN + UI_SCROLLBAR_GUTTER + 180;
     size_hints.min_height = UI_HEADER_HEIGHT + UI_FOOTER_HEIGHT +
                             UI_ROW_HEIGHT;
-    int category_height = UI_HEADER_HEIGHT +
-                          ui->app_count * UI_CATEGORY_HEIGHT;
-    if (size_hints.min_height < category_height) {
-        size_hints.min_height = category_height;
-    }
     XSetWMNormalHints(ui->display, ui->window, &size_hints);
     if (!XStoreName(ui->display, ui->window, "GnuChanSettings")) {
         fprintf(stderr, "gnuchansettings: cannot set the window title\n");
@@ -1078,6 +1167,8 @@ int settings_ui_open(SettingsUi *ui) {
         settings_ui_close(ui);
         return -1;
     }
+    ui->buffer_width = UI_WINDOW_WIDTH;
+    ui->buffer_height = UI_WINDOW_HEIGHT;
     ui->target = ui->buffer;
     ui->draw = XftDrawCreate(ui->display, ui->buffer, ui->visual,
                              ui->colormap);
@@ -1122,6 +1213,11 @@ void settings_ui_run(SettingsUi *ui) {
             }
             redraw = 1;
             break;
+        case ButtonRelease:
+            if (event.xbutton.button == Button1) {
+                ui->scrollbar_drag = 0;
+            }
+            break;
         case MotionNotify:
             handle_motion(ui, &event.xmotion);
             break;
@@ -1132,37 +1228,8 @@ void settings_ui_run(SettingsUi *ui) {
                 (w != ui->window_width || h != ui->window_height)) {
                 ui->window_width = w;
                 ui->window_height = h;
-                int visible = settings_ui_visible_rows(ui);
-                int maximum = ui->page.app
-                                  ? ui->page.app->setting_count - visible : 0;
-                if (maximum < 0) {
-                    maximum = 0;
-                }
-                if (ui->scroll > maximum) {
-                    ui->scroll = maximum;
-                }
-                /* Recreate the back buffer at the new size so the panel
-                   redraws to fill the window instead of leaving empty space. */
-                if (ui->buffer != None) {
-                    XFreePixmap(ui->display, ui->buffer);
-                    ui->buffer = None;
-                }
-                ui->buffer = XCreatePixmap(ui->display, ui->window,
-                                           (unsigned int)w, (unsigned int)h,
-                                           (unsigned int)ui->depth);
-                if (ui->buffer != None) {
-                    if (ui->draw) {
-                        XftDrawDestroy(ui->draw);
-                    }
-                    ui->draw = XftDrawCreate(ui->display, ui->buffer,
-                                             ui->visual, ui->colormap);
-                    ui->target = ui->buffer;
-                } else {
-                    ui->draw = NULL;
-                    ui->target = ui->window;
-                }
+                redraw = 1;
             }
-            redraw = 1;
             break;
         }
         case DestroyNotify:
@@ -1172,8 +1239,75 @@ void settings_ui_run(SettingsUi *ui) {
             break;
         }
 
+        if (event.type == ConfigureNotify) {
+            /* A drag can queue dozens of ConfigureNotify events. Keep only
+               the final dimensions and replace the backing pixmap once, after
+               the burst, instead of exposing intermediate resized frames. */
+            XEvent pending;
+            while (XCheckTypedWindowEvent(ui->display, ui->window,
+                                          ConfigureNotify, &pending)) {
+                int w = pending.xconfigure.width;
+                int h = pending.xconfigure.height;
+                if (w > 0 && h > 0) {
+                    ui->window_width = w;
+                    ui->window_height = h;
+                }
+            }
+            if (ui->buffer_width != ui->window_width ||
+                ui->buffer_height != ui->window_height) {
+                redraw = 1;
+            }
+            int visible = settings_ui_visible_rows(ui);
+            int maximum = ui->page.app
+                              ? ui->page.app->setting_count - visible : 0;
+            if (maximum < 0) {
+                maximum = 0;
+            }
+            if (ui->scroll > maximum) {
+                ui->scroll = maximum;
+            }
+            maximum = ui->app_count - settings_ui_visible_categories(ui);
+            if (maximum < 0) {
+                maximum = 0;
+            }
+            if (ui->category_scroll > maximum) {
+                ui->category_scroll = maximum;
+            }
+
+            if (ui->buffer_width != ui->window_width ||
+                ui->buffer_height != ui->window_height) {
+                Pixmap replacement = XCreatePixmap(
+                    ui->display, ui->window, (unsigned int)ui->window_width,
+                    (unsigned int)ui->window_height, (unsigned int)ui->depth);
+                XftDraw *replacement_draw = replacement != None
+                    ? XftDrawCreate(ui->display, replacement, ui->visual,
+                                    ui->colormap)
+                    : NULL;
+                if (replacement_draw) {
+                    XftDraw *old_draw = ui->draw;
+                    Pixmap old_buffer = ui->buffer;
+                    ui->buffer = replacement;
+                    ui->draw = replacement_draw;
+                    ui->target = replacement;
+                    ui->buffer_width = ui->window_width;
+                    ui->buffer_height = ui->window_height;
+                    if (old_draw) {
+                        XftDrawDestroy(old_draw);
+                    }
+                    if (old_buffer != None) {
+                        XFreePixmap(ui->display, old_buffer);
+                    }
+                } else if (replacement != None) {
+                    XFreePixmap(ui->display, replacement);
+                }
+            }
+        }
+
         if (redraw) {
-            settings_draw(ui);
+            if (ui->buffer_width == ui->window_width &&
+                ui->buffer_height == ui->window_height) {
+                settings_draw(ui);
+            }
         }
     }
 }

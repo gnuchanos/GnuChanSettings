@@ -24,9 +24,9 @@
 
 /* --- the layout -----------------------------------------------------------
  *
- * The window can be resized; the settings list scrolls inside it rather than
- * changing the window size as categories change. The numbers are here because
- * drawing and hit-testing must agree to the pixel. */
+ * The window can be resized; both the settings rows and the sidebar categories
+ * scroll inside it rather than changing the window size. The numbers are here
+ * because drawing and hit-testing must agree to the pixel. */
 #define UI_WINDOW_WIDTH   840
 #define UI_WINDOW_HEIGHT  580
 #define UI_SIDEBAR_WIDTH  220
@@ -34,12 +34,11 @@
 #define UI_ROW_HEIGHT     58
 #define UI_FOOTER_HEIGHT  64
 #define UI_MARGIN         18
-/* A category's row in the sidebar. It is sized so that every category the
-   table can hold fits above the bottom of the window: the sidebar has
-   UI_WINDOW_HEIGHT - UI_HEADER_HEIGHT pixels for categories, and the table
-   grows — the themes category was the twelfth — so the height is chosen
-   against the count rather than left at whatever looked right for the first
-   few. At 40 the twelve of today's table come to 566, inside the 580. */
+#define UI_SCROLLBAR_WIDTH 6
+#define UI_SCROLLBAR_GUTTER 12
+#define UI_SCROLLBAR_MIN_THUMB 22
+/* A category's row in the sidebar. The sidebar can scroll when all categories
+   do not fit in the available height. */
 #define UI_CATEGORY_HEIGHT 28
 
 /* The default width of the field column on the right of a row's label: where
@@ -66,6 +65,16 @@ typedef struct UiPage {
     int               loaded;      /* the file was read (0 = defaults shown) */
 } UiPage;
 
+typedef struct UiScrollbar {
+    int x;
+    int track_y;
+    int width;
+    int track_height;
+    int thumb_y;
+    int thumb_height;
+    int maximum;
+} UiScrollbar;
+
 typedef struct SettingsUi {
     Display *display;
     int      screen;
@@ -78,6 +87,8 @@ typedef struct SettingsUi {
     XftDraw *draw;                 /* the BACK BUFFER as an Xft surface */
     Pixmap   buffer;               /* the whole panel is painted here    */
     Drawable target;               /* where a paint goes: the back buffer */
+    int      buffer_width;         /* dimensions of the back buffer       */
+    int      buffer_height;
 
     SettingsStyle style;
 
@@ -85,6 +96,10 @@ typedef struct SettingsUi {
     int           app_count;
     int           app_index;       /* which category is open            */
     UiPage        page;
+    int           category_scroll; /* first sidebar category shown      */
+    int           scrollbar_drag;  /* 0 none, 1 categories, 2 settings  */
+    int           scrollbar_drag_y;
+    int           scrollbar_drag_scroll;
 
     int           focus_row;       /* the row holding the keyboard, -1 = none */
     int           caret;           /* the caret's byte offset in that field   */
@@ -133,10 +148,84 @@ void settings_ui_load_page(SettingsUi *ui);
  * Every one of these answers a question both halves ask, so they are computed
  * in one place. They are pure: no X, no state changed. */
 
-/* The y of a category's row in the sidebar, and the category a y falls in (or
-   -1). */
+/* The y of a visible category row in the sidebar. */
 int settings_ui_category_y(int index);
-int settings_ui_category_at(const SettingsUi *ui, int y);
+static inline int settings_ui_visible_categories(const SettingsUi *ui) {
+    int height = ui->window_height - UI_HEADER_HEIGHT;
+    int categories = height / UI_CATEGORY_HEIGHT;
+    return categories > 0 ? categories : 1;
+}
+
+static inline int settings_ui_category_at(const SettingsUi *ui, int y) {
+    if (y < UI_HEADER_HEIGHT || y >= ui->window_height) {
+        return -1;
+    }
+    int visible_row = (y - UI_HEADER_HEIGHT) / UI_CATEGORY_HEIGHT;
+    if (visible_row >= settings_ui_visible_categories(ui)) {
+        return -1;
+    }
+    int category = ui->category_scroll + visible_row;
+    return category < ui->app_count ? category : -1;
+}
+
+static inline int settings_ui_scrollbar_geometry(const SettingsUi *ui,
+                                                 int categories,
+                                                 UiScrollbar *bar) {
+    int total = categories
+                    ? ui->app_count
+                    : ui->page.app ? ui->page.app->setting_count : 0;
+    int visible = categories
+                      ? settings_ui_visible_categories(ui)
+                      : (ui->window_height - UI_HEADER_HEIGHT -
+                         UI_FOOTER_HEIGHT) / UI_ROW_HEIGHT;
+    if (visible < 1) {
+        visible = 1;
+    }
+    bar->x = categories ? UI_SIDEBAR_WIDTH - UI_SCROLLBAR_WIDTH - 4
+                        : ui->window_width - UI_SCROLLBAR_WIDTH - 4;
+    bar->track_y = UI_HEADER_HEIGHT + 4;
+    bar->track_height = categories
+                            ? ui->window_height - bar->track_y - 4
+                            : ui->window_height - UI_FOOTER_HEIGHT -
+                                  bar->track_y - 4;
+    bar->width = UI_SCROLLBAR_WIDTH;
+    if (bar->track_height < 1) {
+        bar->track_height = 1;
+    }
+    bar->maximum = total - visible;
+    if (bar->maximum < 0) {
+        bar->maximum = 0;
+    }
+    int scroll = categories ? ui->category_scroll : ui->scroll;
+    if (scroll < 0) {
+        scroll = 0;
+    } else if (scroll > bar->maximum) {
+        scroll = bar->maximum;
+    }
+    int thumb = total > 0 ? bar->track_height * visible / total
+                          : bar->track_height;
+    if (thumb < UI_SCROLLBAR_MIN_THUMB) {
+        thumb = UI_SCROLLBAR_MIN_THUMB;
+    }
+    if (thumb > bar->track_height) {
+        thumb = bar->track_height;
+    }
+    bar->thumb_height = thumb;
+    int travel = bar->track_height - thumb;
+    bar->thumb_y = bar->track_y +
+                   (bar->maximum > 0
+                        ? travel * scroll / bar->maximum
+                        : 0);
+    return bar->maximum > 0;
+}
+
+static inline int settings_ui_footer_status_width(const SettingsUi *ui) {
+    int save_x = ui->window_width - UI_MARGIN - 130;
+    int revert_x = save_x - 130 - 12;
+    int status_x = UI_SIDEBAR_WIDTH + UI_MARGIN;
+    int width = revert_x - UI_MARGIN - status_x;
+    return width > 0 ? width : 0;
+}
 
 /* The rectangle of a setting row's field on screen, counting the scroll. */
 void settings_ui_row_field_rect(const SettingsUi *ui, int row,

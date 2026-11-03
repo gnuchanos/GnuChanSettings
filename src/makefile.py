@@ -228,9 +228,11 @@ def integration_test() -> int:
     if not integration_source.is_file():
         raise SystemExit("error: Settings integration-test source is missing")
     integration_binary = BUILD / "test_settings_integrations"
+    cflags, _ = x11_flags()
     integration_command = [
         "gcc", "-std=c99", "-Wall", "-Wextra",
         "-D_DEFAULT_SOURCE", "-I", str(ROOT),
+        *cflags,
         str(integration_source), str(ROOT / "settings_store.c"),
         str(ROOT / "settings_apps.c"), str(ROOT / "settings_theme.c"),
         "-o", str(integration_binary),

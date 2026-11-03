@@ -5,6 +5,101 @@
 #include <unistd.h>
 
 #include "settings_store.h"
+#include "settings_ui.h"
+
+static int test_category_layout(void) {
+    SettingsUi ui = {0};
+    ui.apps = settings_apps(&ui.app_count);
+    ui.window_height = UI_WINDOW_HEIGHT;
+
+    int system_category = -1;
+    for (int i = 0; i < ui.app_count; i++) {
+        if (strcmp(ui.apps[i].name, "System") == 0) {
+            system_category = i;
+            break;
+        }
+    }
+    if (system_category < 0) {
+        fprintf(stderr, "System category should be registered\n");
+        return 0;
+    }
+    int system_y = UI_HEADER_HEIGHT +
+                   system_category * UI_CATEGORY_HEIGHT + 1;
+    if (settings_ui_category_at(&ui, system_y) >= 0) {
+        fprintf(stderr, "System category should require sidebar scrolling\n");
+        return 0;
+    }
+    int clipped_row_y = UI_HEADER_HEIGHT +
+                        settings_ui_visible_categories(&ui) *
+                            UI_CATEGORY_HEIGHT + 1;
+    if (clipped_row_y < ui.window_height &&
+        settings_ui_category_at(&ui, clipped_row_y) >= 0) {
+        fprintf(stderr, "partially clipped categories should not be clickable\n");
+        return 0;
+    }
+
+    const int heights[] = { UI_WINDOW_HEIGHT, 320, 220 };
+    for (size_t i = 0; i < sizeof(heights) / sizeof(heights[0]); i++) {
+        ui.window_height = heights[i];
+        int maximum = ui.app_count - settings_ui_visible_categories(&ui);
+        if (maximum < 0) {
+            maximum = 0;
+        }
+        for (int category = 0; category < ui.app_count; category++) {
+            ui.category_scroll = category < maximum ? category : maximum;
+            int y = UI_HEADER_HEIGHT +
+                    (category - ui.category_scroll) * UI_CATEGORY_HEIGHT + 1;
+            if (y >= ui.window_height ||
+                settings_ui_category_at(&ui, y) != category) {
+                fprintf(stderr, "%s should be reachable after scrolling\n",
+                        ui.apps[category].name);
+                return 0;
+            }
+        }
+    }
+
+    ui.window_height = 220;
+    ui.category_scroll = 0;
+    UiScrollbar categories;
+    if (!settings_ui_scrollbar_geometry(&ui, 1, &categories) ||
+        categories.maximum <= 0 ||
+        categories.thumb_height >= categories.track_height) {
+        fprintf(stderr, "overflowing categories should show a scrollbar\n");
+        return 0;
+    }
+    ui.category_scroll = categories.maximum;
+    settings_ui_scrollbar_geometry(&ui, 1, &categories);
+    if (categories.thumb_y + categories.thumb_height !=
+        categories.track_y + categories.track_height) {
+        fprintf(stderr, "category scrollbar should reach the bottom\n");
+        return 0;
+    }
+
+    ui.page.app = &ui.apps[system_category];
+    UiScrollbar rows;
+    if (!settings_ui_scrollbar_geometry(&ui, 0, &rows) ||
+        rows.maximum <= 0) {
+        fprintf(stderr, "overflowing settings rows should show a scrollbar\n");
+        return 0;
+    }
+    ui.scroll = rows.maximum;
+    settings_ui_scrollbar_geometry(&ui, 0, &rows);
+    if (rows.thumb_y + rows.thumb_height !=
+        rows.track_y + rows.track_height) {
+        fprintf(stderr, "settings scrollbar should reach the bottom\n");
+        return 0;
+    }
+
+    ui.window_width = UI_SIDEBAR_WIDTH + UI_FIELD_WIDTH + 2 * UI_MARGIN +
+                      UI_SCROLLBAR_GUTTER + 180;
+    int status_x = UI_SIDEBAR_WIDTH + UI_MARGIN;
+    int revert_x = ui.window_width - UI_MARGIN - 130 - 130 - 12;
+    if (status_x + settings_ui_footer_status_width(&ui) > revert_x - UI_MARGIN) {
+        fprintf(stderr, "footer status should not overlap button controls\n");
+        return 0;
+    }
+    return 1;
+}
 
 static const AppDef *find_app(const char *name) {
     int count = 0;
@@ -58,11 +153,13 @@ static int cleanup_config(const char *root) {
         "gnuchan-desktop/panel.conf",
         "GnuChanFileManager/config.conf",
         "GnuChanSettings/system.conf",
+        "GnuChanWelcome/welcome.conf",
     };
     const char *dirs[] = {
         "gnuchan-desktop",
         "GnuChanFileManager",
         "GnuChanSettings",
+        "GnuChanWelcome",
     };
     for (size_t i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
         snprintf(path, sizeof(path), "%s/%s", root, files[i]);
@@ -76,6 +173,10 @@ static int cleanup_config(const char *root) {
 }
 
 static int run_tests(const char *config_home) {
+    if (!test_category_layout()) {
+        return 0;
+    }
+
     int count = 0;
     settings_apps(&count);
     if (count > SETTINGS_MAX_APPS) {
@@ -87,12 +188,15 @@ static int run_tests(const char *config_home) {
     const AppDef *desktop = find_app("GnuChanDesktop");
     const AppDef *file_manager = find_app("GnuChanFileManager");
     const AppDef *sound = find_app("GnuChanSound");
+    const AppDef *welcome = find_app("GnuChanWelcome");
     if (!desktop || !has_setting(desktop, "wallpaper") ||
         !has_setting(desktop, "background_color") ||
         !has_setting(desktop, "wallpaper_mode") ||
         !file_manager || !has_setting(file_manager, "show_hidden") ||
         !has_setting(file_manager, "start_location") ||
-        !sound || !has_setting(sound, "ApplicationLanguage")) {
+        !sound || !has_setting(sound, "ApplicationLanguage") ||
+        !welcome || !has_setting(welcome, "FirstRunComplete") ||
+        strcmp(welcome->file, "welcome.conf") != 0) {
         fprintf(stderr, "one or more new application settings are not registered\n");
         return 0;
     }
@@ -178,6 +282,18 @@ static int run_tests(const char *config_home) {
         settings_load(sound, values) != 1 ||
         strcmp(values[0].text, "Turkish") != 0) {
         fprintf(stderr, "sound language setting round trip failed: %s\n", reason);
+        return 0;
+    }
+
+    if (settings_load(welcome, values) != 0) {
+        fprintf(stderr, "Welcome state unexpectedly exists\n");
+        return 0;
+    }
+    setting_value_set_bool(&values[0], 1, 0);
+    if (settings_save(welcome, values, reason) != 0 ||
+        settings_load(welcome, values) != 1 ||
+        strcmp(values[0].text, "true") != 0) {
+        fprintf(stderr, "Welcome settings round trip failed: %s\n", reason);
         return 0;
     }
     return 1;

@@ -114,7 +114,11 @@ static int text_width(SettingsUi *ui, XftFont *font, const char *text) {
 static void fit_text(SettingsUi *ui, XftFont *font, const char *text,
                      int max_width, char *out, unsigned int size) {
     snprintf(out, size, "%s", text);
-    if (max_width <= 0 || text_width(ui, font, out) <= max_width) {
+    if (max_width <= 0) {
+        out[0] = '\0';
+        return;
+    }
+    if (text_width(ui, font, out) <= max_width) {
         return;
     }
     int length = (int)strlen(out);
@@ -530,13 +534,15 @@ static void draw_sidebar(SettingsUi *ui) {
     draw_text(ui, &muted, ui->style.font, UI_MARGIN, 66,
               gnuchan_lang_t("settings_subtitle"));
 
-    for (int i = 0; i < ui->app_count; i++) {
-        int y = settings_ui_category_y(i);
-        if (y + UI_CATEGORY_HEIGHT > ui->window_height) {
+    int visible = settings_ui_visible_categories(ui);
+    for (int i = 0; i < visible; i++) {
+        int category = ui->category_scroll + i;
+        if (category >= ui->app_count) {
             break;
         }
-        int active = i == ui->app_index;
-        int hovered = i == ui->hover_category;
+        int y = settings_ui_category_y(i);
+        int active = category == ui->app_index;
+        int hovered = category == ui->hover_category;
 
         if (active) {
             fill_rect(ui, ui->style.sidebar_active, 0, y, UI_SIDEBAR_WIDTH,
@@ -548,8 +554,23 @@ static void draw_sidebar(SettingsUi *ui) {
         }
 
         XftColor *colour = active ? &title : &text;
+        char shown[SETTINGS_TEXT_LENGTH];
+        fit_text(ui, ui->style.font, ui->apps[category].name,
+                 UI_SIDEBAR_WIDTH - UI_MARGIN * 2 -
+                     UI_SCROLLBAR_WIDTH - 8,
+                 shown, sizeof(shown));
         draw_text(ui, colour, ui->style.font, UI_MARGIN,
-                  y + UI_CATEGORY_HEIGHT / 2 + 5, ui->apps[i].name);
+                  y + UI_CATEGORY_HEIGHT / 2 + 5, shown);
+    }
+
+    UiScrollbar scrollbar;
+    if (settings_ui_scrollbar_geometry(ui, 1, &scrollbar)) {
+        fill_rounded(ui, ui->style.panel_edge, scrollbar.x - 1,
+                     scrollbar.track_y, scrollbar.width + 2,
+                     scrollbar.track_height, 3);
+        fill_rounded(ui, ui->style.accent, scrollbar.x,
+                     scrollbar.thumb_y, scrollbar.width,
+                     scrollbar.thumb_height, 3);
     }
 
     XftColorFree(ui->display, ui->visual, ui->colormap, &title);
@@ -628,7 +649,8 @@ static void draw_row(SettingsUi *ui, int row) {
 
     fill_rect(ui, ui->style.panel_edge, UI_SIDEBAR_WIDTH + UI_MARGIN,
               y + UI_ROW_HEIGHT - 1,
-              ui->window_width - UI_SIDEBAR_WIDTH - UI_MARGIN * 2, 1);
+              ui->window_width - UI_SIDEBAR_WIDTH - UI_MARGIN * 2 -
+                  UI_SCROLLBAR_GUTTER, 1);
 }
 
 static void draw_footer(SettingsUi *ui) {
@@ -642,8 +664,7 @@ static void draw_footer(SettingsUi *ui) {
         ui->status_failed ? ui->style.danger : ui->style.text_muted);
     char shown[SETTINGS_TEXT_LENGTH];
     fit_text(ui, ui->style.font, ui->status,
-             ui->window_width - UI_SIDEBAR_WIDTH - UI_MARGIN * 2 - 300,
-             shown, sizeof(shown));
+             settings_ui_footer_status_width(ui), shown, sizeof(shown));
     draw_text(ui, &text, ui->style.font, UI_SIDEBAR_WIDTH + UI_MARGIN,
               top + UI_FOOTER_HEIGHT / 2 + 5, shown);
     XftColorFree(ui->display, ui->visual, ui->colormap, &text);
@@ -656,18 +677,24 @@ static void draw_footer(SettingsUi *ui) {
     outline_rect(ui, ui->style.panel_edge, bx, by, bw, bh);
     XftColor button = xft_from_pixel(ui, ui->style.text);
     const char *rev = gnuchan_lang_t("button_revert");
-    int rw = text_width(ui, ui->style.font, rev);
+    char rev_shown[SETTINGS_TEXT_LENGTH];
+    fit_text(ui, ui->style.font, rev, bw - 16, rev_shown,
+             sizeof(rev_shown));
+    int rw = text_width(ui, ui->style.font, rev_shown);
     draw_text(ui, &button, ui->style.font, bx + (bw - rw) / 2,
-              by + bh / 2 + 5, rev);
+              by + bh / 2 + 5, rev_shown);
     XftColorFree(ui->display, ui->visual, ui->colormap, &button);
 
     settings_ui_save_rect(ui, &bx, &by, &bw, &bh);
     fill_rounded(ui, ui->style.accent, bx, by, bw, bh, 8);
     XftColor save_text = xft_from_pixel(ui, ui->style.background);
     const char *sv = gnuchan_lang_t("button_save");
-    int sw = text_width(ui, ui->style.font_bold, sv);
+    char save_shown[SETTINGS_TEXT_LENGTH];
+    fit_text(ui, ui->style.font_bold, sv, bw - 16, save_shown,
+             sizeof(save_shown));
+    int sw = text_width(ui, ui->style.font_bold, save_shown);
     draw_text(ui, &save_text, ui->style.font_bold, bx + (bw - sw) / 2,
-              by + bh / 2 + 5, sv);
+              by + bh / 2 + 5, save_shown);
     XftColorFree(ui->display, ui->visual, ui->colormap, &save_text);
 }
 
@@ -696,6 +723,16 @@ void settings_draw(SettingsUi *ui) {
     }
 
     draw_footer(ui);
+
+    UiScrollbar scrollbar;
+    if (settings_ui_scrollbar_geometry(ui, 0, &scrollbar)) {
+        fill_rounded(ui, ui->style.panel_edge, scrollbar.x - 1,
+                     scrollbar.track_y, scrollbar.width + 2,
+                     scrollbar.track_height, 3);
+        fill_rounded(ui, ui->style.accent, scrollbar.x,
+                     scrollbar.thumb_y, scrollbar.width,
+                     scrollbar.thumb_height, 3);
+    }
 
     /* The list is drawn last, so it sits over the rows it covers. */
     draw_dropdown(ui);

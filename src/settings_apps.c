@@ -282,6 +282,10 @@ static const SettingDef runner_settings[] = {
          "Select an item; + adds, - removes", ""),
 };
 
+static const SettingDef welcome_settings[] = {
+    BOOL("FirstRunComplete", "Welcome guide completed", "First run", "False"),
+};
+
 static const SettingDef autostart_settings[] = {
     LIST("all", "Programs and scripts",
          "Select an item; + adds, - removes", ""),
@@ -539,6 +543,13 @@ static const AppDef app_table[] = {
         "GnuChanRunner", "config.conf", "",
         SETTING_FLAT, 0,
         runner_settings, (int)(sizeof(runner_settings) / sizeof(runner_settings[0])),
+    },
+    {
+        "GnuChanWelcome", "First-run guide and welcome state",
+        "GnuChanWelcome", "welcome.conf", "",
+        SETTING_FLAT, 0,
+        welcome_settings,
+        (int)(sizeof(welcome_settings) / sizeof(welcome_settings[0])),
     },
     {
         "Autostart", "Programs and scripts started at login",

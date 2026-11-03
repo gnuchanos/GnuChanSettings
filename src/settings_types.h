@@ -37,7 +37,7 @@
 #define SETTINGS_MAX_LIST_ITEMS 16
 
 /* How many programs the panel knows how to configure. */
-#define SETTINGS_MAX_APPS 20
+#define SETTINGS_MAX_APPS 24
 
 /* What a value IS, which decides the control the window draws for it and the
    check the writer makes before it writes. */
