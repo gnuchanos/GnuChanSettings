@@ -653,6 +653,109 @@ static void draw_row(SettingsUi *ui, int row) {
                   UI_SCROLLBAR_GUTTER, 1);
 }
 
+static void draw_usb_panel(SettingsUi *ui) {
+    int top, list_top, visible;
+    if (!settings_ui_usb_panel(ui, &top, &list_top, &visible)) {
+        return;
+    }
+    XftColor title = xft_from_pixel(ui, ui->style.text);
+    XftColor muted = xft_from_pixel(ui, ui->style.text_muted);
+    XftColor selected = xft_from_pixel(ui, ui->style.accent);
+    draw_text(ui, &title, ui->style.font_bold, UI_SIDEBAR_WIDTH + UI_MARGIN,
+              top + 16, "USB devices");
+    draw_text(ui, &selected, ui->style.font, ui->window_width - UI_MARGIN - 72,
+              top + 16, "Refresh");
+    fill_rect(ui, ui->style.panel_edge, UI_SIDEBAR_WIDTH + UI_MARGIN,
+              top + 23,
+              ui->window_width - UI_SIDEBAR_WIDTH - 2 * UI_MARGIN -
+                  UI_SCROLLBAR_GUTTER, 1);
+
+    if (ui->usb_device_count == 0) {
+        draw_text(ui, &muted, ui->style.font,
+                  UI_SIDEBAR_WIDTH + UI_MARGIN + 4, list_top + 23,
+                  "No USB devices found.");
+    }
+    for (int line = 0; line < visible; line++) {
+        int index = ui->usb_scroll + line;
+        if (index >= ui->usb_device_count) {
+            break;
+        }
+        SettingsUsbDevice *device = &ui->usb_devices[index];
+        int y = list_top + line * UI_USB_DEVICE_ROW_HEIGHT;
+        if (index == ui->usb_selected) {
+            fill_rounded(ui, ui->style.panel, UI_SIDEBAR_WIDTH + UI_MARGIN,
+                         y + 1,
+                         ui->window_width - UI_SIDEBAR_WIDTH -
+                             2 * UI_MARGIN - UI_SCROLLBAR_GUTTER,
+                         UI_USB_DEVICE_ROW_HEIGHT - 3, 5);
+        }
+        char primary[SETTINGS_USB_NAME_LENGTH + 32];
+        char secondary[SETTINGS_USB_MOUNT_LENGTH + SETTINGS_USB_NAME_LENGTH +
+                       32];
+        if (device->block[0]) {
+            snprintf(primary, sizeof(primary), "%s  (/dev/%s)",
+                     device->product[0] ? device->product : "USB storage",
+                     device->block);
+        } else {
+            snprintf(primary, sizeof(primary), "%s",
+                     device->product[0] ? device->product : "USB device");
+        }
+        snprintf(secondary, sizeof(secondary), "%s  |  USB sleep: %s",
+                 device->mountpoint[0] ? device->mountpoint : "Not mounted",
+                 strcmp(device->power_control, "on") == 0
+                     ? "disabled"
+                     : strcmp(device->power_control, "auto") == 0
+                           ? "enabled"
+                           : device->power_control);
+        char shown[sizeof(secondary)];
+        fit_text(ui, ui->style.font, primary,
+                 ui->window_width - UI_SIDEBAR_WIDTH - 2 * UI_MARGIN -
+                     UI_SCROLLBAR_GUTTER - 12,
+                 shown, sizeof(shown));
+        draw_text(ui, &title, ui->style.font, UI_SIDEBAR_WIDTH + UI_MARGIN + 5,
+                  y + 15, shown);
+        fit_text(ui, ui->style.font, secondary,
+                 ui->window_width - UI_SIDEBAR_WIDTH - 2 * UI_MARGIN -
+                     UI_SCROLLBAR_GUTTER - 12,
+                 shown, sizeof(shown));
+        draw_text(ui, &muted, ui->style.font,
+                  UI_SIDEBAR_WIDTH + UI_MARGIN + 5, y + 31, shown);
+    }
+
+    XftColorFree(ui->display, ui->visual, ui->colormap, &title);
+    XftColorFree(ui->display, ui->visual, ui->colormap, &muted);
+    XftColorFree(ui->display, ui->visual, ui->colormap, &selected);
+}
+
+static void draw_usb_context_menu(SettingsUi *ui) {
+    if (!ui->usb_menu_open || ui->usb_selected < 0 ||
+        ui->usb_selected >= ui->usb_device_count) {
+        return;
+    }
+    static const char *const labels[] = {
+        "Mount volume", "Unmount volume", "Disable USB sleep",
+        "Enable USB sleep"
+    };
+    int menu_x = ui->usb_menu_x;
+    int menu_y = ui->usb_menu_y;
+    fill_rounded(ui, ui->style.sidebar, menu_x, menu_y, 228, 4 * 29, 6);
+    outline_rect(ui, ui->style.panel_edge, menu_x, menu_y, 228, 4 * 29);
+    SettingsUsbDevice *device = &ui->usb_devices[ui->usb_selected];
+    XftColor title = xft_from_pixel(ui, ui->style.text);
+    for (int item = 0; item < 4; item++) {
+        int y = menu_y + item * 29;
+        if ((item == 0 && device->block[0] && !device->mountpoint[0]) ||
+            (item == 1 && device->block[0] && device->mountpoint[0]) ||
+            (item == 2 && strcmp(device->power_control, "auto") == 0) ||
+            (item == 3 && strcmp(device->power_control, "on") == 0)) {
+            fill_rect(ui, ui->style.panel, menu_x + 1, y + 1, 226, 27);
+        }
+        draw_text(ui, &title, ui->style.font, menu_x + 12, y + 19,
+                  labels[item]);
+    }
+    XftColorFree(ui->display, ui->visual, ui->colormap, &title);
+}
+
 static void draw_footer(SettingsUi *ui) {
     int top = ui->window_height - UI_FOOTER_HEIGHT;
     fill_rect(ui, ui->style.sidebar, UI_SIDEBAR_WIDTH, top,
@@ -721,6 +824,7 @@ void settings_draw(SettingsUi *ui) {
         }
         draw_row(ui, row);
     }
+    draw_usb_panel(ui);
 
     draw_footer(ui);
 
@@ -737,6 +841,7 @@ void settings_draw(SettingsUi *ui) {
     /* The list is drawn last, so it sits over the rows it covers. */
     draw_dropdown(ui);
     draw_list_editor(ui);
+    draw_usb_context_menu(ui);
 
     /* The finished picture goes to the window in ONE copy: nothing is shown
        half-drawn, which is what removes the flicker the panel had when every

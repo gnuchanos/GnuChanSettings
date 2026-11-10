@@ -3,6 +3,7 @@
 
 import os
 import pwd
+import re
 import subprocess
 import sys
 import tempfile
@@ -22,6 +23,7 @@ SYSTEM_LOCALES = {
 }
 APP_LANGUAGES = {"English": "en", "Türkçe": "tr"}
 APP_LANGUAGES["Turkish"] = "tr"
+USB_DEVICE_ID = re.compile(r"^[A-Za-z0-9._-]{1,127}$")
 
 
 def atomic_write(path: Path, contents: str, owner: tuple[int, int] | None = None) -> None:
@@ -113,13 +115,57 @@ def apply(profile: str, locale: str, app_language: str) -> None:
     print("Lid events are disabled; the setting will apply after reboot.")
 
 
-if __name__ == "__main__":
-    if len(sys.argv) != 5 or sys.argv[1] != "apply":
-        raise SystemExit(
-            "usage: gnuchan-settings-helper apply PROFILE LOCALE APP_LANGUAGE"
+def apply_usb_power(device_id: str, mode: str) -> None:
+    if (not USB_DEVICE_ID.fullmatch(device_id) or
+            device_id in (".", "..") or ":" in device_id):
+        raise ValueError("invalid USB device identity")
+    if mode not in ("on", "auto"):
+        raise ValueError("unsupported USB power mode")
+    if os.geteuid() != 0:
+        raise RuntimeError("USB power helper must run as root")
+
+    device_path = Path("/sys/bus/usb/devices") / device_id
+    try:
+        resolved = device_path.resolve(strict=True)
+        resolved.relative_to(Path("/sys/devices").resolve(strict=True))
+    except (OSError, ValueError) as error:
+        raise RuntimeError("USB device is no longer available") from error
+    if not (resolved / "idVendor").is_file() or not (
+        resolved / "idProduct"
+    ).is_file():
+        raise RuntimeError("selected path is not a physical USB device")
+
+    control = resolved / "power" / "control"
+    if not control.is_file():
+        raise RuntimeError(
+            "USB autosuspend control is not supported by this device or kernel"
         )
     try:
-        apply(sys.argv[2], sys.argv[3], sys.argv[4])
+        with control.open("w", encoding="ascii") as target:
+            target.write(mode)
+        actual = control.read_text(encoding="ascii").strip()
+    except OSError as error:
+        raise RuntimeError(f"cannot change USB autosuspend: {error}") from error
+    if actual != mode:
+        raise RuntimeError(
+            f"USB autosuspend change was not applied (reported {actual!r})"
+        )
+    print("USB autosuspend disabled." if mode == "on"
+          else "USB autosuspend enabled.")
+
+
+if __name__ == "__main__":
+    try:
+        if len(sys.argv) == 5 and sys.argv[1] == "apply":
+            apply(sys.argv[2], sys.argv[3], sys.argv[4])
+        elif len(sys.argv) == 4 and sys.argv[1] == "usb-power":
+            apply_usb_power(sys.argv[2], sys.argv[3])
+        else:
+            raise SystemExit(
+                "usage: gnuchan-settings-helper apply PROFILE LOCALE "
+                "APP_LANGUAGE\n"
+                "   or: gnuchan-settings-helper usb-power DEVICE_ID on|auto"
+            )
     except (OSError, subprocess.CalledProcessError, RuntimeError, ValueError) as error:
         print(f"gnuchan-settings-helper: {error}", file=sys.stderr)
         raise SystemExit(1) from error

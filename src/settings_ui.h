@@ -21,6 +21,7 @@
 #include "settings_store.h"
 #include "settings_style.h"
 #include "settings_types.h"
+#include "settings_usb.h"
 
 /* --- the layout -----------------------------------------------------------
  *
@@ -52,6 +53,7 @@
 #define UI_LIST_EDITOR_ROW_HEIGHT 30
 #define UI_LIST_EDITOR_HEADER 44
 #define UI_LIST_EDITOR_FOOTER 48
+#define UI_USB_DEVICE_ROW_HEIGHT 36
 
 /* Which row holds the keyboard. -1 means none, which is the state the panel
    opens in — nothing is focused until a person clicks a field. */
@@ -113,6 +115,14 @@ typedef struct SettingsUi {
     int           list_editing;       /* selected item accepts keyboard input */
     int           list_editor_open;   /* the expanded, row-based list editor */
     int           list_scroll;        /* first visible item in that editor */
+
+    SettingsUsbDevice usb_devices[SETTINGS_USB_MAX_DEVICES];
+    int           usb_device_count;
+    int           usb_scroll;
+    int           usb_selected;
+    int           usb_menu_open;
+    int           usb_menu_x;
+    int           usb_menu_y;
 
     /* The window's actual size, which changes when the window manager resizes
        or maximizes it. The panel relays out itself against these numbers. */
@@ -243,6 +253,10 @@ int settings_ui_row_at(const SettingsUi *ui, int x, int y);
 
 /* How many rows fit in the panel's body at the current size. */
 int settings_ui_visible_rows(const SettingsUi *ui);
+
+/* USB storage controls share the System page below its ordinary settings. */
+int settings_ui_usb_panel(const SettingsUi *ui, int *top, int *list_top,
+                          int *visible_rows);
 
 /* The rectangle of the Save button. */
 void settings_ui_save_rect(const SettingsUi *ui, int *x, int *y,

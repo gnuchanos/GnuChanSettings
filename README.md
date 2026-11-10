@@ -35,6 +35,14 @@ after the next login or reboot; TLP changes are applied when saved. Language
 choices configure system and per-user locales; applications without translated
 message catalogs continue to display their existing strings.
 
+The System page also lists connected USB devices and any storage volumes found
+by the kernel. Right-click a volume to mount or unmount it through `udisksctl`,
+or to disable/enable a USB device's runtime autosuspend by setting its sysfs
+`power/control` value to `on` or `auto`. The latter asks for administrator
+authorization through pkexec; devices or kernels without a writable power
+control report an error. Use Refresh after connecting or removing a device.
+Mount access is subject to the system's udisks/polkit policy.
+
 The GnuChanDM, GnuChanDock, GnuChanFetch, GnuChanSL,
 GnuChanNotification and GnuChanSS categories use `Key = value` `.conf` files,
 the same plain format as `system.conf`. If only a legacy `.py` settings file is
@@ -88,6 +96,7 @@ is missing:
 - `libxrender-dev` — `X11/extensions/Xrender.h`
 - `libnotify-bin`, `locales`, `tlp`, `pkexec` and `mate-polkit` for the
   system settings and battery notification features
+- `udisks2` for USB volume mount/unmount actions
 
 The linking is driven by pkg-config for the modules `x11`, `xft`, `xrender`,
 `fontconfig` and `freetype2`.

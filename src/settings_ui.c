@@ -81,6 +81,40 @@ int settings_ui_row_at(const SettingsUi *ui, int x, int y) {
     return ui->scroll + row;
 }
 
+static int is_system_page(const SettingsUi *ui) {
+    return ui->page.app &&
+           strcmp(ui->page.app->dir, "GnuChanSettings") == 0 &&
+           strcmp(ui->page.app->file, "system.conf") == 0;
+}
+
+int settings_ui_usb_panel(const SettingsUi *ui, int *top, int *list_top,
+                          int *visible_rows) {
+    if (!is_system_page(ui)) {
+        return 0;
+    }
+    int panel_top = UI_HEADER_HEIGHT +
+                    ui->page.app->setting_count * UI_ROW_HEIGHT + 8;
+    int first_row = panel_top + 26;
+    int bottom = ui->window_height - UI_FOOTER_HEIGHT - 4;
+    if (first_row >= bottom) {
+        return 0;
+    }
+    int visible = (bottom - first_row) / UI_USB_DEVICE_ROW_HEIGHT;
+    if (visible < 1) {
+        visible = 1;
+    }
+    if (top) {
+        *top = panel_top;
+    }
+    if (list_top) {
+        *list_top = first_row;
+    }
+    if (visible_rows) {
+        *visible_rows = visible;
+    }
+    return 1;
+}
+
 static int list_item_count(const char *text) {
     int count = 0;
     const char *entry = text;
@@ -304,8 +338,22 @@ void settings_ui_load_page(SettingsUi *ui) {
     ui->list_editor_open = 0;
     ui->list_scroll = 0;
     ui->scroll = 0;
+    ui->usb_scroll = 0;
+    ui->usb_selected = -1;
+    ui->usb_menu_open = 0;
+    ui->usb_device_count = 0;
     ui->status[0] = '\0';
     ui->status_failed = 0;
+    int usb_list_error = 0;
+    if (is_system_page(ui)) {
+        int count = settings_usb_list(ui->usb_devices,
+                                      SETTINGS_USB_MAX_DEVICES);
+        if (count >= 0) {
+            ui->usb_device_count = count;
+        } else {
+            usb_list_error = errno;
+        }
+    }
 
     if (ui->page.loaded == 1) {
         snprintf(ui->status, sizeof(ui->status),
@@ -314,7 +362,12 @@ void settings_ui_load_page(SettingsUi *ui) {
         snprintf(ui->status, sizeof(ui->status),
                  gnuchan_lang_t("status_no_file"), ui->page.app->name);
     }
-    ui->status_failed = 0;
+    if (usb_list_error) {
+        snprintf(ui->status, sizeof(ui->status),
+                 "Could not read USB device list: %s",
+                 strerror(usb_list_error));
+        ui->status_failed = 1;
+    }
 }
 
 /* --- acting on the page ---------------------------------------------------- */
@@ -772,6 +825,10 @@ static void handle_key(SettingsUi *ui, XKeyEvent *key) {
 
     switch (symbol) {
     case XK_Escape:
+        if (ui->usb_menu_open) {
+            ui->usb_menu_open = 0;
+            return;
+        }
         if (ui->list_editor_open) {
             ui->list_editor_open = 0;
             ui->list_editing = 0;
@@ -867,11 +924,110 @@ static void handle_key(SettingsUi *ui, XKeyEvent *key) {
 /* --- the pointer ----------------------------------------------------------- */
 
 static void handle_click(SettingsUi *ui, XButtonEvent *press) {
-    if (press->button != Button1) {
+    if (press->button != Button1 && press->button != Button3) {
         return;
     }
     int x = press->x;
     int y = press->y;
+
+    int usb_top, usb_list_top, usb_visible;
+    if (settings_ui_usb_panel(ui, &usb_top, &usb_list_top, &usb_visible)) {
+        int usb_bottom = usb_list_top + usb_visible * UI_USB_DEVICE_ROW_HEIGHT;
+        int refresh_x = ui->window_width - UI_MARGIN - 78;
+        if (press->button == Button3) {
+            ui->usb_menu_open = 0;
+            if (x >= UI_SIDEBAR_WIDTH && y >= usb_list_top &&
+                y < usb_bottom) {
+                int index = ui->usb_scroll +
+                            (y - usb_list_top) / UI_USB_DEVICE_ROW_HEIGHT;
+                if (index >= 0 && index < ui->usb_device_count) {
+                    ui->usb_selected = index;
+                    ui->usb_menu_x = x;
+                    if (ui->usb_menu_x + 228 > ui->window_width) {
+                        ui->usb_menu_x = ui->window_width - 228;
+                    }
+                    ui->usb_menu_y = y;
+                    int menu_bottom = ui->window_height -
+                                      UI_FOOTER_HEIGHT - 4 * 29;
+                    if (ui->usb_menu_y > menu_bottom) {
+                        ui->usb_menu_y = menu_bottom;
+                    }
+                    ui->usb_menu_open = 1;
+                }
+            }
+            return;
+        }
+        if (ui->usb_menu_open) {
+            int menu_x = ui->usb_menu_x;
+            int menu_y = ui->usb_menu_y;
+            if (x >= menu_x && x < menu_x + 228 &&
+                y >= menu_y && y < menu_y + 4 * 29) {
+                int selected_action = (y - menu_y) / 29;
+                SettingsUsbAction action = selected_action == 0
+                    ? SETTINGS_USB_MOUNT
+                    : selected_action == 1
+                          ? SETTINGS_USB_UNMOUNT
+                          : selected_action == 2
+                                ? SETTINGS_USB_DISABLE_AUTOSUSPEND
+                                : SETTINGS_USB_ENABLE_AUTOSUSPEND;
+                char result[SETTINGS_TEXT_LENGTH] = "";
+                int succeeded = settings_usb_action(
+                    &ui->usb_devices[ui->usb_selected], action, result,
+                    sizeof(result)) == 0;
+                snprintf(ui->status, sizeof(ui->status), "%.240s",
+                         result[0] ? result : "USB operation failed.");
+                ui->status_failed = !succeeded;
+                ui->usb_menu_open = 0;
+                if (succeeded) {
+                    int count = settings_usb_list(
+                        ui->usb_devices, SETTINGS_USB_MAX_DEVICES);
+                    if (count >= 0) {
+                        ui->usb_device_count = count;
+                        if (ui->usb_selected >= count) {
+                            ui->usb_selected = count - 1;
+                        }
+                    } else {
+                        snprintf(ui->status, sizeof(ui->status),
+                                 "Operation completed, but USB refresh failed: %.160s",
+                                 strerror(errno));
+                        ui->status_failed = 1;
+                    }
+                }
+                return;
+            }
+            ui->usb_menu_open = 0;
+        }
+        if (x >= refresh_x && y >= usb_top && y < usb_list_top) {
+            int count = settings_usb_list(ui->usb_devices,
+                                          SETTINGS_USB_MAX_DEVICES);
+            ui->usb_device_count = count >= 0 ? count : 0;
+            ui->usb_scroll = 0;
+            if (count < 0) {
+                snprintf(ui->status, sizeof(ui->status),
+                         "Could not read USB device list: %.180s",
+                         strerror(errno));
+            } else {
+                if (ui->usb_selected >= count) {
+                    ui->usb_selected = -1;
+                }
+                snprintf(ui->status, sizeof(ui->status),
+                         "USB device list refreshed.");
+            }
+            ui->status_failed = count < 0;
+            return;
+        }
+        if (y >= usb_list_top && y < usb_bottom) {
+            int index = ui->usb_scroll +
+                        (y - usb_list_top) / UI_USB_DEVICE_ROW_HEIGHT;
+            if (index >= 0 && index < ui->usb_device_count) {
+                ui->usb_selected = index;
+            }
+            return;
+        }
+    }
+    if (press->button == Button3) {
+        return;
+    }
 
     if (ui->list_editor_open) {
         handle_list_editor_click(ui, x, y);
@@ -971,6 +1127,29 @@ static void handle_wheel(SettingsUi *ui, XButtonEvent *press) {
     if (press->x < UI_SIDEBAR_WIDTH) {
         if (press->y < UI_HEADER_HEIGHT ||
             press->y >= ui->window_height) {
+            return;
+        }
+        int usb_top, usb_list_top, usb_visible;
+        if (settings_ui_usb_panel(ui, &usb_top, &usb_list_top, &usb_visible) &&
+            press->y >= usb_list_top) {
+            int maximum = ui->usb_device_count - usb_visible;
+            if (maximum < 0) {
+                maximum = 0;
+            }
+            if (press->button == Button4) {
+                ui->usb_scroll--;
+            } else if (press->button == Button5) {
+                ui->usb_scroll++;
+            } else {
+                return;
+            }
+            if (ui->usb_scroll < 0) {
+                ui->usb_scroll = 0;
+            } else if (ui->usb_scroll > maximum) {
+                ui->usb_scroll = maximum;
+            }
+            (void)usb_top;
+            settings_draw(ui);
             return;
         }
         int maximum = ui->app_count - settings_ui_visible_categories(ui);
@@ -1208,7 +1387,8 @@ void settings_ui_run(SettingsUi *ui) {
             break;
         case ButtonPress:
             handle_wheel(ui, &event.xbutton);
-            if (event.xbutton.button == Button1) {
+            if (event.xbutton.button == Button1 ||
+                event.xbutton.button == Button3) {
                 handle_click(ui, &event.xbutton);
             }
             redraw = 1;

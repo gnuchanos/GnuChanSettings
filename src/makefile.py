@@ -40,6 +40,7 @@ SOURCES = (
     "settings_apps.c",
     "settings_theme.c",
     "settings_style.c",
+    "settings_usb.c",
     "settings_ui.c",
     "settings_draw.c",
     "gnuchan_lang.c",
@@ -50,6 +51,7 @@ HEADERS = (
     "settings_theme.h",
     "settings_store.h",
     "settings_style.h",
+    "settings_usb.h",
     "settings_ui.h",
     "settings_draw.h",
     "gnuchan_lang.h",
@@ -249,6 +251,28 @@ def integration_test() -> int:
 def test() -> int:
     if integration_test() != 0:
         return 1
+
+    usb_source = ROOT / "tests" / "test_settings_usb.c"
+    usb_binary = BUILD / "test_settings_usb"
+    usb_command = [
+        "gcc", "-std=c99", "-Wall", "-Wextra", "-Werror",
+        "-D_DEFAULT_SOURCE", "-I", str(ROOT), str(usb_source),
+        str(ROOT / "settings_usb.c"), "-o", str(usb_binary),
+    ]
+    try:
+        step("Building USB identity tests")
+        if run(usb_command, cwd=ROOT).returncode != 0:
+            raise SystemExit("error: USB test build failed")
+        detail("running safe device identity checks")
+        if run([str(usb_binary)], cwd=ROOT).returncode != 0:
+            return 1
+        helper_test = ROOT / "tests" / "test_settings_usb_helper.py"
+        detail("running privileged USB helper input checks")
+        if run([sys.executable, str(helper_test)], cwd=ROOT).returncode != 0:
+            return 1
+    finally:
+        if usb_binary.exists():
+            usb_binary.unlink()
 
     theme_source = ROOT / "tests" / "test_settings_theme.c"
     if not theme_source.is_file():
